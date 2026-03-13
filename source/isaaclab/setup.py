@@ -37,7 +37,8 @@ INSTALL_REQUIRES = [
     # make sure this is consistent with isaac sim version
     "pillow==11.3.0",
     # livestream
-    "starlette==0.49.1",
+    # Keep this compatible with Isaac Sim's fastapi pin so strict resolvers like uv can lock the environment.
+    "starlette>=0.40.0,<0.46.0",
     # testing
     "pytest",
     "pytest-mock",

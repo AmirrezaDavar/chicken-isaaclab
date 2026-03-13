@@ -1,3 +1,47 @@
+[project]
+name = "isaaclab-uv-workspace"
+version = "0.1.0"
+description = "Reproducible uv workspace for Isaac Lab, Isaac Sim, and all supported training frameworks."
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "torch==2.7.0 ; platform_system == 'Linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')",
+    "torchvision==0.22.0 ; platform_system == 'Linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')",
+    "isaacsim[all,extscache]==5.1.0.0",
+    "isaaclab",
+    "isaaclab_assets",
+    "isaaclab_contrib",
+    "isaaclab_tasks",
+    "isaaclab_rl[all]",
+    "isaaclab_mimic[all]",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')"]
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+isaaclab = { path = "source/isaaclab", editable = true }
+isaaclab_assets = { path = "source/isaaclab_assets", editable = true }
+isaaclab_contrib = { path = "source/isaaclab_contrib", editable = true }
+isaaclab_mimic = { path = "source/isaaclab_mimic", editable = true }
+isaaclab_rl = { path = "source/isaaclab_rl", editable = true }
+isaaclab_tasks = { path = "source/isaaclab_tasks", editable = true }
+torch = [
+    { index = "pytorch-cu128", marker = "platform_system == 'Linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')" },
+]
+torchvision = [
+    { index = "pytorch-cu128", marker = "platform_system == 'Linux' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')" },
+]
+
 # Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
