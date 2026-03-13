@@ -1,0 +1,2 @@
+articulation_enabled,enabled_self_collisions,name,prim_path,sleep_threshold,solver_position_iteration_count,solver_velocity_iteration_count,stabilization_threshold
+,False,base_link,/humanoid/base_link,4.999999873689376e-05,32,1,9.999999747378752e-06

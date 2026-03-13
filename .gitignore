@@ -16,6 +16,8 @@
 
 # Python
 .DS_Store
+.venv
+.venv/
 **/*.egg-info/
 **/__pycache__/
 **/.pytest_cache/
