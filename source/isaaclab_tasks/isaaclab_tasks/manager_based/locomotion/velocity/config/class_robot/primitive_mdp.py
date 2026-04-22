@@ -14,7 +14,7 @@ import torch
 
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
-from isaaclab.managers import CommandTerm, CommandTermCfg, SceneEntityCfg
+from isaaclab.managers import CommandTerm, CommandTermCfg, ManagerTermBase, SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils import configclass
 
@@ -177,8 +177,17 @@ class StepTargetFootCommand(CommandTerm):
             return
         if swing_sign is None:
             swing_sign = self._current_swing_sign()[env_ids]
-        self._command[env_ids, 0] = self._command[env_ids, 0].uniform_(*self.cfg.x_range)
-        self._command[env_ids, 1] = self._command[env_ids, 1].uniform_(*self.cfg.y_abs_range) * swing_sign
+        x_low, x_high = self.cfg.x_range
+        if x_low == x_high:
+            self._command[env_ids, 0] = x_low
+        else:
+            self._command[env_ids, 0] = self._command[env_ids, 0].uniform_(x_low, x_high)
+
+        y_low, y_high = self.cfg.y_abs_range
+        if y_low == y_high:
+            self._command[env_ids, 1] = y_low * swing_sign
+        else:
+            self._command[env_ids, 1] = self._command[env_ids, 1].uniform_(y_low, y_high) * swing_sign
         self._last_swing_sign[env_ids] = swing_sign
 
     def _resample_command(self, env_ids: Sequence[int]):
@@ -252,6 +261,27 @@ def binary_contacts(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshol
     return contacts.float()
 
 
+def illegal_contact_below_height(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
+    threshold: float,
+    max_height: float,
+) -> torch.Tensor:
+    """Terminate only when a monitored body has significant contact while actually near the ground.
+
+    For this humanoid asset, broad contact sensing can report large support-reaction forces on torso and hip bodies
+    even when only the feet are touching the ground. Filtering by body-frame height removes these false positives
+    while keeping contact-based fall detection for limbs or torso segments that truly reach the floor.
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    asset: Articulation = env.scene[asset_cfg.name]
+    net_forces = contact_sensor.data.net_forces_w_history
+    contact_mask = torch.max(torch.norm(net_forces[:, :, sensor_cfg.body_ids], dim=-1), dim=1)[0] > threshold
+    near_ground_mask = asset.data.body_pos_w[:, asset_cfg.body_ids, 2] < max_height
+    return torch.any(contact_mask & near_ground_mask, dim=1)
+
+
 def pelvis_height_error_l2(
     env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
@@ -310,6 +340,21 @@ def _resolve_articulation_joint_ids(asset: Articulation, asset_cfg: SceneEntityC
     if isinstance(joint_ids, torch.Tensor):
         return joint_ids.tolist()
     return list(joint_ids)
+
+
+def _resolve_env_ids(
+    env_ids: Sequence[int] | slice | torch.Tensor | None,
+    num_envs: int,
+    device: str,
+) -> torch.Tensor:
+    """Convert environment ids into a dense long tensor on the correct device."""
+    if env_ids is None:
+        return torch.arange(num_envs, device=device, dtype=torch.long)
+    if isinstance(env_ids, slice):
+        return torch.arange(num_envs, device=device, dtype=torch.long)[env_ids]
+    if isinstance(env_ids, torch.Tensor):
+        return env_ids.to(device=device, dtype=torch.long).flatten()
+    return torch.as_tensor(list(env_ids), device=device, dtype=torch.long)
 
 
 def class_humanoid_joint_semantic_signs(
@@ -401,6 +446,146 @@ def _foot_positions_in_base_frame(
     return foot_pos_b.reshape(env.num_envs, len(asset_cfg.body_ids), 3)
 
 
+def _base_position_in_env_frame(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Return base position expressed in each environment frame."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    return asset.data.root_pos_w - env.scene.env_origins
+
+
+def _feet_midpoint_in_env_frame(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
+) -> torch.Tensor:
+    """Return the midpoint between both feet expressed in each environment frame."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    foot_pos_w = asset.data.body_pos_w[:, asset_cfg.body_ids, :2]
+    return foot_pos_w.mean(dim=1) - env.scene.env_origins[:, :2]
+
+
+class BaseXYFromResetObservation(ManagerTermBase):
+    """Observe base XY displacement relative to the episode-reset pose."""
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
+        self.initial_base_xy = torch.zeros((env.num_envs, 2), device=env.device)
+        self.reset()
+
+    def reset(self, env_ids: Sequence[int] | slice | torch.Tensor | None = None) -> None:
+        env_ids = _resolve_env_ids(env_ids, self.num_envs, self.device)
+        if env_ids.numel() == 0:
+            return
+        base_pos_env = _base_position_in_env_frame(self._env, self.asset_cfg)
+        self.initial_base_xy[env_ids] = base_pos_env[env_ids, :2]
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        base_pos_env = _base_position_in_env_frame(env, asset_cfg)
+        return (base_pos_env[:, :2] - self.initial_base_xy).clone()
+
+
+class BaseResetPositionPenalty(ManagerTermBase):
+    """Penalize horizontal base drift once it leaves a small in-place deadband."""
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
+        self.initial_base_xy = torch.zeros((env.num_envs, 2), device=env.device)
+        self.reset()
+
+    def reset(self, env_ids: Sequence[int] | slice | torch.Tensor | None = None) -> None:
+        env_ids = _resolve_env_ids(env_ids, self.num_envs, self.device)
+        if env_ids.numel() == 0:
+            return
+        base_pos_env = _base_position_in_env_frame(self._env, self.asset_cfg)
+        self.initial_base_xy[env_ids] = base_pos_env[env_ids, :2]
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        deadband: float = 0.05,
+        std: float = 0.08,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        base_pos_env = _base_position_in_env_frame(env, asset_cfg)
+        error = torch.norm(base_pos_env[:, :2] - self.initial_base_xy, dim=1)
+        excess = torch.clamp(error - deadband, min=0.0)
+        return torch.square(excess / max(std, 1.0e-6))
+
+
+class BaseResetOutwardVelocityPenalty(ManagerTermBase):
+    """Penalize only outward motion away from the reset anchor, not corrective return motion."""
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
+        self.initial_base_xy = torch.zeros((env.num_envs, 2), device=env.device)
+        self.reset()
+
+    def reset(self, env_ids: Sequence[int] | slice | torch.Tensor | None = None) -> None:
+        env_ids = _resolve_env_ids(env_ids, self.num_envs, self.device)
+        if env_ids.numel() == 0:
+            return
+        base_pos_env = _base_position_in_env_frame(self._env, self.asset_cfg)
+        self.initial_base_xy[env_ids] = base_pos_env[env_ids, :2]
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        deadband: float = 0.03,
+        distance_scale: float = 0.10,
+        vel_scale: float = 0.20,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        asset: Articulation = env.scene[asset_cfg.name]
+        base_pos_env = _base_position_in_env_frame(env, asset_cfg)
+        offset = base_pos_env[:, :2] - self.initial_base_xy
+        distance = torch.norm(offset, dim=1)
+        radial_dir = offset / torch.clamp(distance.unsqueeze(1), min=1.0e-6)
+        radial_speed = torch.sum(asset.data.root_lin_vel_w[:, :2] * radial_dir, dim=1)
+        outward_speed = torch.clamp(radial_speed, min=0.0)
+        active = (distance > deadband).float()
+        distance_gate = torch.clamp((distance - deadband) / max(distance_scale, 1.0e-6), 0.0, 1.0)
+        return active * distance_gate * torch.square(outward_speed / max(vel_scale, 1.0e-6))
+
+
+class FeetMidpointResetPenalty(ManagerTermBase):
+    """Penalize the walking pattern drifting away by anchoring the feet midpoint to reset."""
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.asset_cfg: SceneEntityCfg = cfg.params.get(
+            "asset_cfg", SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"])
+        )
+        self.initial_midpoint_xy = torch.zeros((env.num_envs, 2), device=env.device)
+        self.reset()
+
+    def reset(self, env_ids: Sequence[int] | slice | torch.Tensor | None = None) -> None:
+        env_ids = _resolve_env_ids(env_ids, self.num_envs, self.device)
+        if env_ids.numel() == 0:
+            return
+        feet_midpoint_env = _feet_midpoint_in_env_frame(self._env, self.asset_cfg)
+        self.initial_midpoint_xy[env_ids] = feet_midpoint_env[env_ids]
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        deadband: float = 0.04,
+        std: float = 0.08,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
+    ) -> torch.Tensor:
+        feet_midpoint_env = _feet_midpoint_in_env_frame(env, asset_cfg)
+        error = torch.norm(feet_midpoint_env - self.initial_midpoint_xy, dim=1)
+        excess = torch.clamp(error - deadband, min=0.0)
+        return torch.square(excess / max(std, 1.0e-6))
+
+
 def _selected_and_support_contacts(
     env: ManagerBasedRLEnv,
     swing_command_name: str,
@@ -441,10 +626,16 @@ def selected_foot_step_reward_tanh(
     swing_command_name: str,
     target_command_name: str,
     std: float = 0.07,
+    sensor_cfg: SceneEntityCfg | None = None,
+    threshold: float = 1.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
 ) -> torch.Tensor:
     err = selected_foot_step_error(env, swing_command_name, target_command_name, asset_cfg)
-    return 1.0 - torch.tanh(err / std)
+    reward = 1.0 - torch.tanh(err / std)
+    if sensor_cfg is not None:
+        swing_contact, support_contact = _selected_and_support_contacts(env, swing_command_name, sensor_cfg, threshold)
+        reward = reward * (1.0 - swing_contact) * support_contact
+    return reward
 
 
 def feet_lateral_order_penalty(
@@ -550,6 +741,25 @@ def selected_swing_knee_min_flex_reward(
     selected_knee = knee_flexion[torch.arange(env.num_envs, device=env.device), selected_idx]
     flex_span = max(target_angle - start_angle, 1.0e-6)
     return torch.clamp((selected_knee - start_angle) / flex_span, 0.0, 1.0)
+
+
+def support_knee_straight_reward(
+    env: ManagerBasedRLEnv,
+    swing_command_name: str,
+    max_angle: float = 0.35,
+    std: float = 0.10,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=["Left_Knee_RS04", "Right_Knee_RS04"]),
+) -> torch.Tensor:
+    """Reward keeping the support knee relatively straight.
+
+    This counters the bilateral crouch solution where both knees bend together and the robot
+    shuffles in place without a clear stance leg.
+    """
+    knee_flexion = class_humanoid_knee_flexion(env, asset_cfg)
+    _, support_idx = _selected_and_support_leg_indices(env, swing_command_name)
+    support_knee = knee_flexion[torch.arange(env.num_envs, device=env.device), support_idx]
+    flex_excess = torch.clamp(support_knee - max_angle, min=0.0)
+    return 1.0 - torch.tanh(flex_excess / std)
 
 
 def hip_only_swing_penalty(

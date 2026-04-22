@@ -13,6 +13,7 @@ dependencies = [
     "isaaclab_tasks",
     "isaaclab_rl[all]",
     "isaaclab_mimic[all]",
+    "ruff>=0.15.7",
 ]
 
 [tool.uv]

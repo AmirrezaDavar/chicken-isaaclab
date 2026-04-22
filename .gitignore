@@ -45,6 +45,10 @@ docker/.container.cfg
 docker/artifacts/
 *.tmp
 
+# Local work files
+/local_files/
+/my_scripts/
+
 # Doc Outputs
 **/docs/_build/*
 **/generated/*

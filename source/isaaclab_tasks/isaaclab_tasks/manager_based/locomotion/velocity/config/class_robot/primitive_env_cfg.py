@@ -27,6 +27,20 @@ from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import Lo
 
 from isaaclab_assets import CLASS_HUMANOID_CFG  # isort: skip
 
+STEP_TERMINATION_BODY_NAMES = [
+    "base_link",
+    "Hip_1",
+    "Head_1",
+    "HipYoke_.*",
+    "Shoulder_.*",
+    "UpBicep_.*",
+    "LowBicep_.*",
+    "Forearm_.*",
+    "Wrist_.*",
+    "UpperThigh_.*",
+    "LowerThigh_.*",
+]
+
 
 @configclass
 class PrimitiveObservationsCfg:
@@ -117,7 +131,8 @@ class StepCommandsCfg:
     target_foot_pos_xy = primitive_mdp.StepTargetFootCommandCfg(
         # This command is resampled when the swing-leg phase changes, not on an independent timer.
         resampling_time_range=(1.0e6, 1.0e6),
-        x_range=(0.02, 0.10),
+        # Keep the step target directly below the pelvis in the forward/backward axis for true in-place stepping.
+        x_range=(0.0, 0.0),
         y_abs_range=(0.08, 0.14),
         swing_command_name="swing_foot",
         debug_vis=False,
@@ -128,11 +143,13 @@ class StepCommandsCfg:
 class StepRewardsCfg(PrimitiveCommonRewardsCfg):
     step_target_reward = RewTerm(
         func=primitive_mdp.selected_foot_step_reward_tanh,
-        weight=5.0,
+        weight=3.0,
         params={
             "swing_command_name": "swing_foot",
             "target_command_name": "target_foot_pos_xy",
             "std": 0.06,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Foot_Left_1", "Foot_Right_1"]),
+            "threshold": 1.0,
             "asset_cfg": SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
         },
     )
@@ -147,6 +164,16 @@ class StepRewardsCfg(PrimitiveCommonRewardsCfg):
             "asset_cfg": SceneEntityCfg("robot", joint_names=["Left_Knee_RS04", "Right_Knee_RS04"]),
         },
     )
+    support_knee_straight = RewTerm(
+        func=primitive_mdp.support_knee_straight_reward,
+        weight=1.5,
+        params={
+            "swing_command_name": "swing_foot",
+            "max_angle": 0.35,
+            "std": 0.10,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["Left_Knee_RS04", "Right_Knee_RS04"]),
+        },
+    )
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
         weight=1.2,
@@ -154,6 +181,24 @@ class StepRewardsCfg(PrimitiveCommonRewardsCfg):
             "command_name": "swing_foot",
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Foot_Left_1", "Foot_Right_1"]),
             "threshold": 0.45,
+        },
+    )
+    alternating_contact_pattern = RewTerm(
+        func=primitive_mdp.alternating_contact_pattern_reward,
+        weight=2.0,
+        params={
+            "swing_command_name": "swing_foot",
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Foot_Left_1", "Foot_Right_1"]),
+            "threshold": 1.0,
+        },
+    )
+    swing_foot_contact = RewTerm(
+        func=primitive_mdp.swing_foot_contact_penalty,
+        weight=-1.0,
+        params={
+            "swing_command_name": "swing_foot",
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Foot_Left_1", "Foot_Right_1"]),
+            "threshold": 1.0,
         },
     )
     support_foot_slip = RewTerm(
@@ -174,7 +219,8 @@ class StepRewardsCfg(PrimitiveCommonRewardsCfg):
             "asset_cfg": SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
         },
     )
-    base_lin_vel_xy = RewTerm(func=primitive_mdp.base_lin_vel_xy_l2, weight=-1.0)
+    # Keep a mild general XY velocity cost; stronger drift handling lives in reset-anchor penalties below.
+    base_lin_vel_xy = RewTerm(func=primitive_mdp.base_lin_vel_xy_l2, weight=-0.3)
     base_ang_vel_z = RewTerm(func=primitive_mdp.base_ang_vel_z_l2, weight=-0.2)
     joint_deviation_hip = RewTerm(
         func=mdp.joint_deviation_l1,
@@ -196,11 +242,13 @@ class StepAlternatingRewardsCfg(PrimitiveCommonRewardsCfg):
 
     step_target_reward = RewTerm(
         func=primitive_mdp.selected_foot_step_reward_tanh,
-        weight=5.0,
+        weight=4.0,
         params={
             "swing_command_name": "swing_foot",
             "target_command_name": "target_foot_pos_xy",
             "std": 0.06,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Foot_Left_1", "Foot_Right_1"]),
+            "threshold": 1.0,
             "asset_cfg": SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
         },
     )
@@ -211,6 +259,16 @@ class StepAlternatingRewardsCfg(PrimitiveCommonRewardsCfg):
             "swing_command_name": "swing_foot",
             "start_angle": 0.0,
             "target_angle": 0.60,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["Left_Knee_RS04", "Right_Knee_RS04"]),
+        },
+    )
+    support_knee_straight = RewTerm(
+        func=primitive_mdp.support_knee_straight_reward,
+        weight=1.0,
+        params={
+            "swing_command_name": "swing_foot",
+            "max_angle": 0.35,
+            "std": 0.10,
             "asset_cfg": SceneEntityCfg("robot", joint_names=["Left_Knee_RS04", "Right_Knee_RS04"]),
         },
     )
@@ -227,7 +285,7 @@ class StepAlternatingRewardsCfg(PrimitiveCommonRewardsCfg):
     )
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
-        weight=2.0,
+        weight=3.0,
         params={
             "command_name": "swing_foot",
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Foot_Left_1", "Foot_Right_1"]),
@@ -270,7 +328,7 @@ class StepAlternatingRewardsCfg(PrimitiveCommonRewardsCfg):
             "asset_cfg": SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
         },
     )
-    base_lin_vel_xy = RewTerm(func=primitive_mdp.base_lin_vel_xy_l2, weight=-0.6)
+    base_lin_vel_xy = RewTerm(func=primitive_mdp.base_lin_vel_xy_l2, weight=-0.3)
     base_ang_vel_z = RewTerm(func=primitive_mdp.base_ang_vel_z_l2, weight=-0.2)
     joint_deviation_hip = RewTerm(
         func=mdp.joint_deviation_l1,
@@ -482,13 +540,47 @@ class ClassHumanoidPrimitiveStepEnvCfg(ClassHumanoidPrimitiveBaseEnvCfg):
         self.observations.policy.target_foot_pos_xy = ObsTerm(
             func=mdp.generated_commands, params={"command_name": "target_foot_pos_xy"}
         )
+        self.observations.policy.base_xy_from_reset = ObsTerm(
+            func=primitive_mdp.BaseXYFromResetObservation,
+            params={"asset_cfg": SceneEntityCfg("robot")},
+        )
+
+        # Net drift needs explicit shaping that does not punish corrective motion back toward the reset pose.
+        self.rewards.base_reset_position = RewTerm(
+            func=primitive_mdp.BaseResetPositionPenalty,
+            weight=-3.0,
+            params={"deadband": 0.06, "std": 0.10, "asset_cfg": SceneEntityCfg("robot")},
+        )
+        self.rewards.base_reset_outward_vel = RewTerm(
+            func=primitive_mdp.BaseResetOutwardVelocityPenalty,
+            weight=-1.5,
+            params={
+                "deadband": 0.03,
+                "distance_scale": 0.10,
+                "vel_scale": 0.20,
+                "asset_cfg": SceneEntityCfg("robot"),
+            },
+        )
+        self.rewards.feet_midpoint_reset = RewTerm(
+            func=primitive_mdp.FeetMidpointResetPenalty,
+            weight=-4.0,
+            params={
+                "deadband": 0.05,
+                "std": 0.08,
+                "asset_cfg": SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
+            },
+        )
 
         # Match walking-style failure handling for fall detection.
         self.terminations.bad_orientation = None
         self.terminations.root_too_low = None
-        self.terminations.base_contact.params["threshold"] = 1.0
+        self.terminations.base_contact.func = mdp.illegal_contact
+        self.terminations.base_contact.params = {
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="base_link"),
+            "threshold": 1.0,
+        }
         self.events.reset_base.params = {
-            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+            "pose_range": {"x": (-1.5, -1.5), "y": (1.5, 1.5), "yaw": (-3.14, 3.14)},
             "velocity_range": {
                 "x": (0.0, 0.0),
                 "y": (0.0, 0.0),
@@ -498,22 +590,6 @@ class ClassHumanoidPrimitiveStepEnvCfg(ClassHumanoidPrimitiveBaseEnvCfg):
                 "yaw": (0.0, 0.0),
             },
         }
-
-        # Reflect walking Option 3: expand contact-termination bodies beyond base_link.
-        self.terminations.base_contact.params["sensor_cfg"].body_names = [
-            "base_link",
-            "Hip_1",
-            "Head_1",
-            "HipYoke_.*",
-            "Shoulder_.*",
-            "UpBicep_.*",
-            "LowBicep_.*",
-            "Forearm_.*",
-            "Wrist_.*",
-            "UpperThigh_.*",
-            "LowerThigh_.*",
-        ]
-
 
 @configclass
 class ClassHumanoidPrimitiveStepAltEnvCfg(ClassHumanoidPrimitiveStepEnvCfg):
@@ -534,6 +610,17 @@ class ClassHumanoidPrimitiveStepShapingEnvCfg(ClassHumanoidPrimitiveStepEnvCfg):
     """Option variant: add clearance and anti-compensation shaping to the all-in step rewards."""
 
     rewards: StepShapingRewardsCfg = StepShapingRewardsCfg()
+
+
+@configclass
+class ClassHumanoidPrimitiveStepGeomTermEnvCfg(ClassHumanoidPrimitiveStepEnvCfg):
+    """Option variant: use geometric fall checks instead of broad illegal-contact termination."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.terminations.bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.8})
+        self.terminations.root_too_low = DoneTerm(func=mdp.root_height_below_minimum, params={"minimum_height": 0.55})
+        self.terminations.base_contact = None
 
 
 @configclass

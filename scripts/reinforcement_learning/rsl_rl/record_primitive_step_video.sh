@@ -12,7 +12,7 @@ if [[ -f ".venv/bin/activate" ]]; then
 fi
 
 NUM_ENVS="${NUM_ENVS:-1}"
-VIDEO_LENGTH="${VIDEO_LENGTH:-500}"
+VIDEO_LENGTH="${VIDEO_LENGTH:-1500}"
 
 ARGS=(
   --task Isaac-Primitive-Step-v0
