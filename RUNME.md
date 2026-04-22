@@ -25,7 +25,12 @@ which python
 
 ## 2. Start a Training Run
 
-This example trains the extended base-contact Class Humanoid task with RSL-RL:
+This trains the final rough Class Humanoid task with RSL-RL. The task id
+`Isaac-Velocity-Rough-ClassHumanoid-v0` is registered to:
+
+```text
+source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/rough_env_cfg.py
+```
 
 ```bash
 ./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
@@ -34,21 +39,9 @@ This example trains the extended base-contact Class Humanoid task with RSL-RL:
   --max_iterations 2000 \
   --seed 42 \
   --experiment_name class_humanoid_rough \
-  --run_name extended_base_contact \
-  --task Isaac-Velocity-Rough-ClassHumanoid-ExtendedBaseContact-v0
+  --run_name final_rough \
+  --task Isaac-Velocity-Rough-ClassHumanoid-v0
 ```
-
-Useful task variants:
-
-```text
-Isaac-Velocity-Rough-ClassHumanoid-v0
-Isaac-Velocity-Rough-ClassHumanoid-ContactPenalty-v0
-Isaac-Velocity-Rough-ClassHumanoid-BadOrientation-v0
-Isaac-Velocity-Rough-ClassHumanoid-ExtendedBaseContact-v0
-Isaac-Velocity-Rough-ClassHumanoid-FootLift-v0
-```
-
-To compare variants cleanly, keep `--seed`, `--num_envs`, and `--max_iterations` the same, and only change `--task` and `--run_name`.
 
 ## 3. Pick a Checkpoint
 
@@ -69,7 +62,7 @@ echo "$CHECKPOINT"
 Replace `<run_dir>` with the run directory you want to play, for example:
 
 ```bash
-RUN_DIR=logs/rsl_rl/class_humanoid_rough/2026-03-09_23-23-05_overnight_20260309_232301_opt1_contact
+RUN_DIR=logs/rsl_rl/class_humanoid_rough/2026-04-22_13-30-00_final_rough
 CHECKPOINT=$(ls -1v "$RUN_DIR"/model_*.pt | tail -1)
 echo "$CHECKPOINT"
 ```
@@ -80,7 +73,7 @@ Use the same task that was used during training:
 
 ```bash
 ./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
-  --task Isaac-Velocity-Rough-ClassHumanoid-ExtendedBaseContact-v0 \
+  --task Isaac-Velocity-Rough-ClassHumanoid-v0 \
   --num_envs 1 \
   --checkpoint "$CHECKPOINT"
 ```
@@ -101,7 +94,7 @@ This records headless video with a follow camera attached to `base_link`:
 ```bash
 ./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
   --headless \
-  --task Isaac-Velocity-Rough-ClassHumanoid-ExtendedBaseContact-v0 \
+  --task Isaac-Velocity-Rough-ClassHumanoid-v0 \
   --num_envs 1 \
   --checkpoint "$CHECKPOINT" \
   --video \
