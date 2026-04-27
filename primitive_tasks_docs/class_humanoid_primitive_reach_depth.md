@@ -4,10 +4,10 @@
 
 | Item | Value |
 | --- | --- |
-| Gym ID | `Isaac-Primitive-ReachDepth-v0` |
-| Environment config class | `ClassHumanoidPrimitiveReachDepthEnvCfg` |
-| PPO runner config class | `ClassHumanoidPrimitiveReachDepthPPORunnerCfg` |
-| Helper training script | `scripts/reinforcement_learning/rsl_rl/train_primitive_reach_depth.sh` |
+| Gym ID | `Isaac-ReachDepth-ClassHumanoid-v0` |
+| Environment config class | `ClassHumanoidReachDepthEnvCfg` |
+| PPO runner config class | `ClassHumanoidReachDepthPPORunnerCfg` |
+| Helper training script | `scripts/reinforcement_learning/rsl_rl/train_reach_depth.sh` |
 | Default env count in env config | `1536` |
 | Default env count in helper script | `8` |
 | Episode length | `8.0 s` |
@@ -239,8 +239,10 @@ All three settings are part of the current repository state.
 ## Source files
 
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/__init__.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_env_cfg.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/reach_env_cfg.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/reach_mdp.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/agents/rsl_rl_ppo_cfg.py`
 - `source/isaaclab/isaaclab/envs/mdp/actions/actions_cfg.py`
 - `source/isaaclab/isaaclab/envs/mdp/actions/joint_actions.py`

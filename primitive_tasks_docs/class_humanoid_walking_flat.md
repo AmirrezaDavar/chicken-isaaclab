@@ -225,7 +225,7 @@ SKRL flat config is present in `agents/skrl_flat_ppo_cfg.yaml`.
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/rough_env_cfg.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/velocity_env_cfg.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/mdp/rewards.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common_mdp.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/agents/rsl_rl_ppo_cfg.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/agents/skrl_flat_ppo_cfg.yaml`
 - `source/isaaclab/isaaclab/envs/mdp/commands/commands_cfg.py`

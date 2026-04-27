@@ -6,22 +6,22 @@ The step family has five registered environment IDs:
 
 | Gym ID | Env config class | What changes |
 | --- | --- | --- |
-| `Isaac-Primitive-Step-v0` | `ClassHumanoidPrimitiveStepEnvCfg` | Base step task |
-| `Isaac-Primitive-Step-Alt-v0` | `ClassHumanoidPrimitiveStepAltEnvCfg` | Replaces the reward set with `StepAlternatingRewardsCfg` |
-| `Isaac-Primitive-Step-All-v0` | `ClassHumanoidPrimitiveStepAllEnvCfg` | Adds the swing-knee range reward on top of the Alt reward set |
-| `Isaac-Primitive-Step-Shaping-v0` | `ClassHumanoidPrimitiveStepShapingEnvCfg` | Adds the most shaping terms and is the most feature-rich variant |
-| `Isaac-Primitive-Step-GeomTerm-v0` | `ClassHumanoidPrimitiveStepGeomTermEnvCfg` | Uses geometric fall checks instead of base-contact termination |
+| `Isaac-Step-ClassHumanoid-v0` | `ClassHumanoidStepEnvCfg` | Base step task |
+| `Isaac-Step-ClassHumanoid-Alt-v0` | `ClassHumanoidStepAltEnvCfg` | Replaces the reward set with `StepAlternatingRewardsCfg` |
+| `Isaac-Step-ClassHumanoid-All-v0` | `ClassHumanoidStepAllEnvCfg` | Adds the swing-knee range reward on top of the Alt reward set |
+| `Isaac-Step-ClassHumanoid-Shaping-v0` | `ClassHumanoidStepShapingEnvCfg` | Adds the most shaping terms and is the most feature-rich variant |
+| `Isaac-Step-ClassHumanoid-GeomTerm-v0` | `ClassHumanoidStepGeomTermEnvCfg` | Uses geometric fall checks instead of base-contact termination |
 
-This document describes `Isaac-Primitive-Step-Shaping-v0` in detail, because it is the most feature-rich step variant currently implemented. Differences from the other step variants are summarized near the end.
+This document describes `Isaac-Step-ClassHumanoid-Shaping-v0` in detail, because it is the most feature-rich step variant currently implemented. Differences from the other step variants are summarized near the end.
 
 ## Registration and entry points
 
 | Item | Value |
 | --- | --- |
-| Primary Gym ID documented here | `Isaac-Primitive-Step-Shaping-v0` |
-| Environment config class | `ClassHumanoidPrimitiveStepShapingEnvCfg` |
-| PPO runner config class | `ClassHumanoidPrimitiveStepShapingPPORunnerCfg` |
-| Helper training script | `scripts/reinforcement_learning/rsl_rl/train_primitive_step_shaping.sh` |
+| Primary Gym ID documented here | `Isaac-Step-ClassHumanoid-Shaping-v0` |
+| Environment config class | `ClassHumanoidStepShapingEnvCfg` |
+| PPO runner config class | `ClassHumanoidStepShapingPPORunnerCfg` |
+| Helper training script | `scripts/reinforcement_learning/rsl_rl/train_step_shaping.sh` |
 | Default env count in env config | `2048` |
 | Default env count in helper script | `2048` |
 | Episode length | `10.0 s` |
@@ -103,7 +103,7 @@ Actual leg selection rule:
 
 This means the step target is purely lateral. The code intentionally keeps the forward/backward target fixed at zero for "true in-place stepping."
 
-## Reward function for `Isaac-Primitive-Step-Shaping-v0`
+## Reward function for `Isaac-Step-ClassHumanoid-Shaping-v0`
 
 All terms below are active together in the shaping variant.
 
@@ -228,11 +228,11 @@ The step variants differ only in reward composition and termination choice.
 
 | Variant | Difference from the shaping variant |
 | --- | --- |
-| `Isaac-Primitive-Step-v0` | Uses the smaller `StepRewardsCfg`: lower step-target reward, range-based swing-knee reward instead of min-flex shaping, no leg-shortening reward, no base-clearance reward, no swing-support height-difference reward, no hip-only penalty |
-| `Isaac-Primitive-Step-Alt-v0` | Uses `StepAlternatingRewardsCfg`: stronger alternating-contact shaping, minimum swing-knee flex reward, leg-shortening reward, but still no base-clearance or hip-only shaping |
-| `Isaac-Primitive-Step-All-v0` | Uses `StepAllRewardsCfg`: same as Alt plus the swing-knee range reward |
-| `Isaac-Primitive-Step-Shaping-v0` | Uses `StepShapingRewardsCfg`: same as All plus swing-foot base clearance, swing-vs-support height difference, and hip-only swing penalty |
-| `Isaac-Primitive-Step-GeomTerm-v0` | Inherits the base step rewards and switches failure logic to `bad_orientation(limit=0.8)` and `root_height_below_minimum(0.55)`, with base-contact termination disabled |
+| `Isaac-Step-ClassHumanoid-v0` | Uses the smaller `StepRewardsCfg`: lower step-target reward, range-based swing-knee reward instead of min-flex shaping, no leg-shortening reward, no base-clearance reward, no swing-support height-difference reward, no hip-only penalty |
+| `Isaac-Step-ClassHumanoid-Alt-v0` | Uses `StepAlternatingRewardsCfg`: stronger alternating-contact shaping, minimum swing-knee flex reward, leg-shortening reward, but still no base-clearance or hip-only shaping |
+| `Isaac-Step-ClassHumanoid-All-v0` | Uses `StepAllRewardsCfg`: same as Alt plus the swing-knee range reward |
+| `Isaac-Step-ClassHumanoid-Shaping-v0` | Uses `StepShapingRewardsCfg`: same as All plus swing-foot base clearance, swing-vs-support height difference, and hip-only swing penalty |
+| `Isaac-Step-ClassHumanoid-GeomTerm-v0` | Inherits the base step rewards and switches failure logic to `bad_orientation(limit=0.8)` and `root_height_below_minimum(0.55)`, with base-contact termination disabled |
 
 ## Training-script note
 
@@ -241,8 +241,10 @@ The PPO runner config for step variants sets `max_iterations = 2200`, but the he
 ## Source files
 
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/__init__.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_env_cfg.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/step_env_cfg.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/step_mdp.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/agents/rsl_rl_ppo_cfg.py`
 - `source/isaaclab/isaaclab/envs/mdp/actions/actions_cfg.py`
 - `source/isaaclab/isaaclab/envs/mdp/actions/joint_actions.py`

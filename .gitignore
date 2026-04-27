@@ -18,6 +18,7 @@
 .DS_Store
 .venv
 .venv/
+env_isaacsim/
 **/*.egg-info/
 **/__pycache__/
 **/.pytest_cache/

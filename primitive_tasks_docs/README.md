@@ -20,8 +20,14 @@ Task docs:
 Primary source files:
 
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/__init__.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_env_cfg.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/squat_env_cfg.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/squat_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/step_env_cfg.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/step_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/reach_env_cfg.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/reach_mdp.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/agents/rsl_rl_ppo_cfg.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/velocity_env_cfg.py`
 - `source/isaaclab_assets/isaaclab_assets/robots/class_humanoid.py`
@@ -30,7 +36,7 @@ Common implementation facts shared by the primitive-task family:
 
 | Item | Implemented behavior |
 | --- | --- |
-| Base environment class | All primitive tasks inherit from `LocomotionVelocityRoughEnvCfg` through `ClassHumanoidPrimitiveBaseEnvCfg`. |
+| Base environment class | Squat, step, and reach tasks inherit directly from `LocomotionVelocityRoughEnvCfg` and share defaults through `common.py`. |
 | Simulation timing | `sim.dt = 0.005`, `decimation = 4`, so the policy acts every `0.02 s`. |
 | Terrain | Flat plane terrain only. Terrain generator and terrain curriculum are disabled. |
 | Robot asset | `CLASS_HUMANOID_CFG`, loaded from `my_assets/humanoid_tuned.usd`. |
@@ -46,13 +52,13 @@ Common implementation facts shared by the primitive-task family:
 
 Registered primitive-task Gym IDs:
 
-- `Isaac-Primitive-Squat-v0`
-- `Isaac-Primitive-Step-v0`
-- `Isaac-Primitive-Step-Alt-v0`
-- `Isaac-Primitive-Step-All-v0`
-- `Isaac-Primitive-Step-Shaping-v0`
-- `Isaac-Primitive-Step-GeomTerm-v0`
-- `Isaac-Primitive-ReachDepth-v0`
+- `Isaac-Squat-ClassHumanoid-v0`
+- `Isaac-Step-ClassHumanoid-v0`
+- `Isaac-Step-ClassHumanoid-Alt-v0`
+- `Isaac-Step-ClassHumanoid-All-v0`
+- `Isaac-Step-ClassHumanoid-Shaping-v0`
+- `Isaac-Step-ClassHumanoid-GeomTerm-v0`
+- `Isaac-ReachDepth-ClassHumanoid-v0`
 
 Registered walking-task Gym IDs:
 

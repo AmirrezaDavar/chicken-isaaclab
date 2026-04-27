@@ -4,10 +4,10 @@
 
 | Item | Value |
 | --- | --- |
-| Gym ID | `Isaac-Primitive-Squat-v0` |
-| Environment config class | `ClassHumanoidPrimitiveSquatEnvCfg` |
-| PPO runner config class | `ClassHumanoidPrimitiveSquatPPORunnerCfg` |
-| Helper training script | `scripts/reinforcement_learning/rsl_rl/train_primitive_squat.sh` |
+| Gym ID | `Isaac-Squat-ClassHumanoid-v0` |
+| Environment config class | `ClassHumanoidSquatEnvCfg` |
+| PPO runner config class | `ClassHumanoidSquatPPORunnerCfg` |
+| Helper training script | `scripts/reinforcement_learning/rsl_rl/train_squat.sh` |
 | Default env count in env config | `2048` |
 | Default env count in helper script | `2048` |
 | Episode length | `8.0 s` |
@@ -150,8 +150,10 @@ Not implemented:
 ## Source files
 
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/__init__.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_env_cfg.py`
-- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/primitive_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/common_mdp.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/squat_env_cfg.py`
+- `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/squat_mdp.py`
 - `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/class_robot/agents/rsl_rl_ppo_cfg.py`
 - `source/isaaclab/isaaclab/envs/mdp/actions/actions_cfg.py`
 - `source/isaaclab/isaaclab/envs/mdp/actions/joint_actions.py`
