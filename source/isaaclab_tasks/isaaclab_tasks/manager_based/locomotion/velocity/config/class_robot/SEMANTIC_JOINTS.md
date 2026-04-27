@@ -1,6 +1,6 @@
 # Class Humanoid Semantic Joint Notes
 
-This note records the joint-sign conventions that matter for primitive-skill rewards.
+This note records the joint-sign conventions that matter for Class Humanoid task rewards.
 
 ## Why this exists
 
@@ -57,7 +57,8 @@ Verified from `isaac_param_dump/rigid_bodies.csv`:
 ## Current implementation
 
 Code lives in:
-- `primitive_mdp.py`
+- `common_mdp.py`
+- `step_mdp.py` for step-specific semantic rewards
 
 Helpers added:
 - `semantic_signed_joint_pos(...)`
@@ -89,7 +90,7 @@ General observation convention now used for Class Humanoid tasks:
 This convention is applied to:
 - `joint_pos` observations for class humanoid locomotion tasks
 - `joint_vel` observations for class humanoid locomotion tasks
-- semantic knee-flexion rewards in primitive stepping
+- semantic knee-flexion rewards in stepping
 
 ## Reward usage rule
 
@@ -108,19 +109,21 @@ Semantic joint observations are enabled for the Class Humanoid locomotion tasks 
 
 - `rough_env_cfg.py`
 - `flat_env_cfg.py` through inheritance from rough
-- `primitive_env_cfg.py`
+- `squat_env_cfg.py`
+- `step_env_cfg.py`
+- `reach_env_cfg.py`
 
 This means the policy now sees semantic joint position/velocity for:
 - rough walking
 - flat walking
-- primitive squat
-- primitive step
-- primitive step alt
-- primitive step all
-- primitive step shaping
-- primitive reach-depth
+- squat
+- step
+- step alt
+- step all
+- step shaping
+- reach-depth
 
-Additional primitive-step reward that now uses exact body names from `isaac_param_dump`:
+Additional step reward that now uses exact body names from `isaac_param_dump`:
 
 - `swing_leg_shortening_reward`
   - compares `HipYoke_Left_1 -> Foot_Left_1` and `HipYoke_Right_1 -> Foot_Right_1`
@@ -140,7 +143,7 @@ Reason:
 When hip-pitch or ankle rewards are added, follow the same pattern:
 
 1. verify the sign in replay
-2. add a semantic helper in `primitive_mdp.py`
+2. add a semantic helper in `common_mdp.py`
 3. use the helper in rewards instead of raw `joint_pos`
 
 Do not change the USD / asset model just to fix sign conventions unless the whole project is being migrated.
@@ -148,13 +151,13 @@ For Task E, semantic conversion in task code is the lower-risk path.
 
 Step task variants now differ only in knee-shaping strategy:
 
-- `Isaac-Primitive-Step-v0`
+- `Isaac-Step-ClassHumanoid-v0`
   - original swing-knee target-range reward
-- `Isaac-Primitive-Step-Alt-v0`
+- `Isaac-Step-ClassHumanoid-Alt-v0`
   - replaces the range reward with a minimum-flex reward so learning signal exists before the policy discovers a large bend
-- `Isaac-Primitive-Step-All-v0`
+- `Isaac-Step-ClassHumanoid-All-v0`
   - keeps the `Alt` minimum-flex reward and adds the original range reward back as a secondary style term
-- `Isaac-Primitive-Step-Shaping-v0`
+- `Isaac-Step-ClassHumanoid-Shaping-v0`
   - keeps the `All` knee shaping and adds:
     - swing-foot clearance in base frame
     - swing/support foot height difference

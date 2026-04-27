@@ -50,11 +50,11 @@ class ClassHumanoidFlatPPORunnerCfg(ClassHumanoidRoughPPORunnerCfg):
 
 
 @configclass
-class ClassHumanoidPrimitivePPORunnerCfg(ClassHumanoidFlatPPORunnerCfg):
+class ClassHumanoidTaskPPORunnerCfg(ClassHumanoidFlatPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
         self.max_iterations = 2000
-        self.experiment_name = "class_humanoid_primitive"
+        self.experiment_name = "class_humanoid_task"
         self.policy.actor_hidden_dims = [256, 256, 128]
         self.policy.critic_hidden_dims = [256, 256, 128]
         self.algorithm.entropy_coef = 0.005
@@ -62,48 +62,48 @@ class ClassHumanoidPrimitivePPORunnerCfg(ClassHumanoidFlatPPORunnerCfg):
 
 
 @configclass
-class ClassHumanoidPrimitiveSquatPPORunnerCfg(ClassHumanoidPrimitivePPORunnerCfg):
+class ClassHumanoidSquatPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.experiment_name = "class_humanoid_primitive_squat"
+        self.experiment_name = "class_humanoid_squat"
         self.max_iterations = 1800
 
 
 @configclass
-class ClassHumanoidPrimitiveStepPPORunnerCfg(ClassHumanoidPrimitivePPORunnerCfg):
+class ClassHumanoidStepPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.experiment_name = "class_humanoid_primitive_step"
+        self.experiment_name = "class_humanoid_step"
         self.max_iterations = 2200
 
 
 @configclass
-class ClassHumanoidPrimitiveStepAltPPORunnerCfg(ClassHumanoidPrimitivePPORunnerCfg):
+class ClassHumanoidStepAltPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.experiment_name = "class_humanoid_primitive_step"
+        self.experiment_name = "class_humanoid_step"
         self.max_iterations = 2200
 
 
 @configclass
-class ClassHumanoidPrimitiveStepAllPPORunnerCfg(ClassHumanoidPrimitivePPORunnerCfg):
+class ClassHumanoidStepAllPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.experiment_name = "class_humanoid_primitive_step"
+        self.experiment_name = "class_humanoid_step"
         self.max_iterations = 2200
 
 
 @configclass
-class ClassHumanoidPrimitiveStepShapingPPORunnerCfg(ClassHumanoidPrimitivePPORunnerCfg):
+class ClassHumanoidStepShapingPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.experiment_name = "class_humanoid_primitive_step"
+        self.experiment_name = "class_humanoid_step"
         self.max_iterations = 2200
 
 
 @configclass
-class ClassHumanoidPrimitiveReachDepthPPORunnerCfg(ClassHumanoidPrimitivePPORunnerCfg):
+class ClassHumanoidReachDepthPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.experiment_name = "class_humanoid_primitive_reach_depth"
+        self.experiment_name = "class_humanoid_reach_depth"
         self.max_iterations = 2600

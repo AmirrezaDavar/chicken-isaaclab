@@ -6,7 +6,10 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../" && pwd)"
 
 cd "${REPO_ROOT}"
 
-if [[ -f ".venv/bin/activate" ]]; then
+if [[ -f "env_isaacsim/bin/activate" ]]; then
+  # shellcheck disable=SC1091
+  source "env_isaacsim/bin/activate"
+elif [[ -f ".venv/bin/activate" ]]; then
   # shellcheck disable=SC1091
   source ".venv/bin/activate"
 fi
@@ -15,11 +18,12 @@ NUM_ENVS="${NUM_ENVS:-1}"
 VIDEO_LENGTH="${VIDEO_LENGTH:-500}"
 
 ARGS=(
-  --task Isaac-Primitive-ReachDepth-v0
+  --task Isaac-ReachDepth-ClassHumanoid-v0
   --num_envs "${NUM_ENVS}"
   --video
   --video_length "${VIDEO_LENGTH}"
   --headless
+  --enable_cameras
 )
 
 if [[ -n "${CHECKPOINT:-}" ]]; then

@@ -60,77 +60,77 @@ gym.register(
 
 
 gym.register(
-    id="Isaac-Primitive-Squat-v0",
+    id="Isaac-Squat-ClassHumanoid-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.primitive_env_cfg:ClassHumanoidPrimitiveSquatEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidPrimitiveSquatPPORunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.squat_env_cfg:ClassHumanoidSquatEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidSquatPPORunnerCfg",
     },
 )
 
 
 gym.register(
-    id="Isaac-Primitive-Step-v0",
+    id="Isaac-Step-ClassHumanoid-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.primitive_env_cfg:ClassHumanoidPrimitiveStepEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidPrimitiveStepPPORunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.step_env_cfg:ClassHumanoidStepEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidStepPPORunnerCfg",
     },
 )
 
 
 gym.register(
-    id="Isaac-Primitive-Step-Alt-v0",
+    id="Isaac-Step-ClassHumanoid-Alt-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.primitive_env_cfg:ClassHumanoidPrimitiveStepAltEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidPrimitiveStepAltPPORunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.step_env_cfg:ClassHumanoidStepAltEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidStepAltPPORunnerCfg",
     },
 )
 
 
 gym.register(
-    id="Isaac-Primitive-Step-All-v0",
+    id="Isaac-Step-ClassHumanoid-All-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.primitive_env_cfg:ClassHumanoidPrimitiveStepAllEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidPrimitiveStepAllPPORunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.step_env_cfg:ClassHumanoidStepAllEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidStepAllPPORunnerCfg",
     },
 )
 
 
 gym.register(
-    id="Isaac-Primitive-Step-Shaping-v0",
+    id="Isaac-Step-ClassHumanoid-Shaping-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.primitive_env_cfg:ClassHumanoidPrimitiveStepShapingEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidPrimitiveStepShapingPPORunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.step_env_cfg:ClassHumanoidStepShapingEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidStepShapingPPORunnerCfg",
     },
 )
 
 
 gym.register(
-    id="Isaac-Primitive-Step-GeomTerm-v0",
+    id="Isaac-Step-ClassHumanoid-GeomTerm-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.primitive_env_cfg:ClassHumanoidPrimitiveStepGeomTermEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidPrimitiveStepPPORunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.step_env_cfg:ClassHumanoidStepGeomTermEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidStepPPORunnerCfg",
     },
 )
 
 
 gym.register(
-    id="Isaac-Primitive-ReachDepth-v0",
+    id="Isaac-ReachDepth-ClassHumanoid-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.primitive_env_cfg:ClassHumanoidPrimitiveReachDepthEnvCfg",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidPrimitiveReachDepthPPORunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.reach_env_cfg:ClassHumanoidReachDepthEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidReachDepthPPORunnerCfg",
     },
 )

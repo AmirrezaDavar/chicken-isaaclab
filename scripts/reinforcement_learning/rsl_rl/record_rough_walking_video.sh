@@ -6,7 +6,10 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../" && pwd)"
 
 cd "${REPO_ROOT}"
 
-if [[ -f ".venv/bin/activate" ]]; then
+if [[ -f "env_isaacsim/bin/activate" ]]; then
+  # shellcheck disable=SC1091
+  source "env_isaacsim/bin/activate"
+elif [[ -f ".venv/bin/activate" ]]; then
   # shellcheck disable=SC1091
   source ".venv/bin/activate"
 fi

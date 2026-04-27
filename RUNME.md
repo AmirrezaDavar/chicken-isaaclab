@@ -2,18 +2,18 @@
 
 Run these commands from the repository root.
 
-## 1. Activate the uv Environment
+## 1. Create and Activate the uv Environment
 
-If the environment has not been created yet, sync it first:
+Use a named uv project environment for Isaac Sim:
 
 ```bash
-uv sync --locked
+UV_PROJECT_ENVIRONMENT=env_isaacsim uv sync --locked
 ```
 
-Activate the repository virtual environment:
+Activate it:
 
 ```bash
-source .venv/bin/activate
+source env_isaacsim/bin/activate
 ```
 
 Optional quick check:

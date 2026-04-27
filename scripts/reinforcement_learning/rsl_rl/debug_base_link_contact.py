@@ -11,7 +11,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 parser = argparse.ArgumentParser(description="Debug base_link contact/termination for locomotion tasks.")
-parser.add_argument("--task", type=str, default="Isaac-Primitive-Step-v0", help="Gym task name.")
+parser.add_argument("--task", type=str, default="Isaac-Step-ClassHumanoid-v0", help="Gym task name.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments.")
 parser.add_argument("--steps", type=int, default=1000, help="Number of simulation steps.")
 parser.add_argument("--print_every", type=int, default=20, help="Print period in steps.")
