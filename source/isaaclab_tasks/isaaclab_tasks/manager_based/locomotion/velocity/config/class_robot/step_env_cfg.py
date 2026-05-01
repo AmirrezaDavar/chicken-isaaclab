@@ -150,11 +150,24 @@ class StepAlternatingRewardsCfg(ClassHumanoidTaskRewardsCfg):
 
     step_target_reward = RewTerm(
         func=step_mdp.selected_foot_step_reward_tanh,
-        weight=4.0,
+        weight=14.0,
         params={
             "swing_command_name": "swing_foot",
             "target_command_name": "target_foot_pos_xy",
-            "std": 0.06,
+            "std": 0.12,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
+            "threshold": 1.0,
+            "asset_cfg": SceneEntityCfg("robot", body_names=FOOT_BODY_NAMES),
+        },
+    )
+    step_target_error = RewTerm(
+        func=step_mdp.selected_foot_step_error_penalty,
+        weight=-0.8,
+        params={
+            "swing_command_name": "swing_foot",
+            "target_command_name": "target_foot_pos_xy",
+            "std": 0.10,
+            "max_error": 0.45,
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
             "threshold": 1.0,
             "asset_cfg": SceneEntityCfg("robot", body_names=FOOT_BODY_NAMES),
@@ -162,7 +175,7 @@ class StepAlternatingRewardsCfg(ClassHumanoidTaskRewardsCfg):
     )
     swing_knee_min_flex = RewTerm(
         func=step_mdp.selected_swing_knee_min_flex_reward,
-        weight=1.2,
+        weight=0.9,
         params={
             "swing_command_name": "swing_foot",
             "start_angle": 0.0,
@@ -172,7 +185,7 @@ class StepAlternatingRewardsCfg(ClassHumanoidTaskRewardsCfg):
     )
     support_knee_straight = RewTerm(
         func=step_mdp.support_knee_straight_reward,
-        weight=1.0,
+        weight=1.2,
         params={
             "swing_command_name": "swing_foot",
             "max_angle": 0.35,
@@ -193,16 +206,16 @@ class StepAlternatingRewardsCfg(ClassHumanoidTaskRewardsCfg):
     )
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
-        weight=3.0,
+        weight=2.5,
         params={
             "command_name": "swing_foot",
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
-            "threshold": 0.45,
+            "threshold": 0.35,
         },
     )
     alternating_contact_pattern = RewTerm(
         func=step_mdp.alternating_contact_pattern_reward,
-        weight=3.0,
+        weight=4.0,
         params={
             "swing_command_name": "swing_foot",
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
@@ -211,7 +224,7 @@ class StepAlternatingRewardsCfg(ClassHumanoidTaskRewardsCfg):
     )
     swing_foot_contact = RewTerm(
         func=step_mdp.swing_foot_contact_penalty,
-        weight=-1.5,
+        weight=-2.0,
         params={
             "swing_command_name": "swing_foot",
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
@@ -220,7 +233,7 @@ class StepAlternatingRewardsCfg(ClassHumanoidTaskRewardsCfg):
     )
     support_foot_slip = RewTerm(
         func=step_mdp.support_foot_slip_penalty,
-        weight=-0.3,
+        weight=-0.5,
         params={
             "swing_command_name": "swing_foot",
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
@@ -275,7 +288,7 @@ class StepShapingRewardsCfg(StepAllRewardsCfg):
 
     swing_foot_base_clearance = RewTerm(
         func=step_mdp.swing_foot_base_clearance_reward,
-        weight=1.0,
+        weight=0.7,
         params={
             "swing_command_name": "swing_foot",
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
@@ -297,9 +310,21 @@ class StepShapingRewardsCfg(StepAllRewardsCfg):
             "asset_cfg": SceneEntityCfg("robot", body_names=FOOT_BODY_NAMES),
         },
     )
+    swing_support_height_excess = RewTerm(
+        func=step_mdp.swing_support_height_excess_penalty,
+        weight=-0.8,
+        params={
+            "swing_command_name": "swing_foot",
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FOOT_BODY_NAMES),
+            "max_height_diff": 0.16,
+            "std": 0.08,
+            "threshold": 1.0,
+            "asset_cfg": SceneEntityCfg("robot", body_names=FOOT_BODY_NAMES),
+        },
+    )
     hip_only_swing = RewTerm(
         func=step_mdp.hip_only_swing_penalty,
-        weight=-0.8,
+        weight=-1.2,
         params={
             "swing_command_name": "swing_foot",
             "hip_threshold": 0.35,
@@ -325,7 +350,7 @@ class ClassHumanoidStepEnvCfg(LocomotionVelocityRoughEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         configure_class_humanoid_flat_scene(self)
-        configure_class_humanoid_task_defaults(self)
+        configure_class_humanoid_task_defaults(self, action_scale=0.45)
 
         self.episode_length_s = 10.0
         self.observations.policy.swing_foot = ObsTerm(func=mdp.generated_commands, params={"command_name": "swing_foot"})
@@ -339,31 +364,52 @@ class ClassHumanoidStepEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         self.rewards.base_reset_position = RewTerm(
             func=step_mdp.BaseResetPositionPenalty,
-            weight=-3.0,
-            params={"deadband": 0.06, "std": 0.10, "asset_cfg": SceneEntityCfg("robot")},
+            weight=-0.25,
+            params={"deadband": 0.12, "std": 0.20, "asset_cfg": SceneEntityCfg("robot")},
         )
         self.rewards.base_reset_outward_vel = RewTerm(
             func=step_mdp.BaseResetOutwardVelocityPenalty,
-            weight=-1.5,
+            weight=-0.25,
             params={
-                "deadband": 0.03,
-                "distance_scale": 0.10,
-                "vel_scale": 0.20,
+                "deadband": 0.08,
+                "distance_scale": 0.20,
+                "vel_scale": 0.30,
                 "asset_cfg": SceneEntityCfg("robot"),
             },
         )
         self.rewards.feet_midpoint_reset = RewTerm(
             func=step_mdp.FeetMidpointResetPenalty,
-            weight=-4.0,
+            weight=-0.5,
             params={
-                "deadband": 0.05,
-                "std": 0.08,
+                "deadband": 0.10,
+                "std": 0.18,
                 "asset_cfg": SceneEntityCfg("robot", body_names=FOOT_BODY_NAMES),
             },
         )
+        self.rewards.alive = RewTerm(func=mdp.is_alive, weight=2.0)
+        self.rewards.step_target_proximity = RewTerm(
+            func=step_mdp.selected_foot_step_reward_tanh,
+            weight=3.0,
+            params={
+                "swing_command_name": "swing_foot",
+                "target_command_name": "target_foot_pos_xy",
+                "std": 0.30,
+                "asset_cfg": SceneEntityCfg("robot", body_names=FOOT_BODY_NAMES),
+            },
+        )
+        self.rewards.root_height_below = RewTerm(
+            func=step_mdp.root_height_below_penalty,
+            weight=-3.0,
+            params={"minimum_height": 0.68, "std": 0.08, "asset_cfg": SceneEntityCfg("robot")},
+        )
+        self.rewards.termination_penalty.weight = -250.0
+        self.rewards.torso_tilt_l2.weight = -6.0
+        self.rewards.action_rate_l2.weight = -0.005
 
-        self.terminations.bad_orientation = None
-        self.terminations.root_too_low = None
+        self.terminations.bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.8})
+        self.terminations.root_too_low = DoneTerm(
+            func=mdp.root_height_below_minimum, params={"minimum_height": 0.50}
+        )
         self.terminations.base_contact.func = mdp.illegal_contact
         self.terminations.base_contact.params = {
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=BASE_BODY_NAME),
