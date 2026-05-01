@@ -353,6 +353,24 @@ def selected_foot_step_reward_tanh(
     return reward
 
 
+def selected_foot_step_error_penalty(
+    env: ManagerBasedRLEnv,
+    swing_command_name: str,
+    target_command_name: str,
+    std: float = 0.10,
+    max_error: float = 0.45,
+    sensor_cfg: SceneEntityCfg | None = None,
+    threshold: float = 1.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
+) -> torch.Tensor:
+    err = torch.clamp(selected_foot_step_error(env, swing_command_name, target_command_name, asset_cfg), max=max_error)
+    penalty = torch.square(err / max(std, 1.0e-6))
+    if sensor_cfg is not None:
+        swing_contact, support_contact = _selected_and_support_contacts(env, swing_command_name, sensor_cfg, threshold)
+        penalty = penalty * (1.0 - swing_contact) * support_contact
+    return penalty
+
+
 def feet_lateral_order_penalty(
     env: ManagerBasedRLEnv,
     min_separation: float = 0.04,
@@ -404,6 +422,38 @@ def swing_support_height_difference_reward(
     diff_span = max(target_height_diff - start_height_diff, 1.0e-6)
     reward = torch.clamp((height_diff - start_height_diff) / diff_span, 0.0, 1.0)
     return reward * active_swing
+
+
+def swing_support_height_excess_penalty(
+    env: ManagerBasedRLEnv,
+    swing_command_name: str,
+    sensor_cfg: SceneEntityCfg,
+    max_height_diff: float = 0.16,
+    std: float = 0.08,
+    threshold: float = 1.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["Foot_Left_1", "Foot_Right_1"]),
+) -> torch.Tensor:
+    asset: Articulation = env.scene[asset_cfg.name]
+    foot_pos_w = asset.data.body_pos_w[:, asset_cfg.body_ids, :3]
+    selected_idx, support_idx = _selected_and_support_leg_indices(env, swing_command_name)
+    env_ids = torch.arange(env.num_envs, device=env.device)
+    swing_height = foot_pos_w[env_ids, selected_idx, 2]
+    support_height = foot_pos_w[env_ids, support_idx, 2]
+    swing_contact, support_contact = _selected_and_support_contacts(env, swing_command_name, sensor_cfg, threshold)
+    active_swing = (1.0 - swing_contact) * support_contact
+    excess = torch.clamp((swing_height - support_height) - max_height_diff, min=0.0)
+    return torch.square(excess / max(std, 1.0e-6)) * active_swing
+
+
+def root_height_below_penalty(
+    env: ManagerBasedRLEnv,
+    minimum_height: float = 0.68,
+    std: float = 0.08,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    asset: Articulation = env.scene[asset_cfg.name]
+    deficit = torch.clamp(minimum_height - asset.data.root_pos_w[:, 2], min=0.0)
+    return torch.square(deficit / max(std, 1.0e-6))
 
 
 def selected_swing_knee_angle_range_reward(
