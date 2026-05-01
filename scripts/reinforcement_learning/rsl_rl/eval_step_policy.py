@@ -72,15 +72,26 @@ def _quantile_or_nan(values: list[float], q: float) -> float:
     return float(torch.quantile(tensor, q).item())
 
 
+def _get_cached_foot_body_ids(env) -> tuple[list[int], list[int]]:
+    unwrapped = env.unwrapped
+    cache = getattr(unwrapped, "_eval_step_policy_foot_id_cache", None)
+    if cache is None:
+        robot = unwrapped.scene["robot"]
+        contact_sensor = unwrapped.scene["contact_forces"]
+        foot_body_ids = [robot.data.body_names.index(name) for name in FOOT_BODY_NAMES]
+        sensor_foot_ids, _ = contact_sensor.find_bodies(FOOT_BODY_NAMES)
+        if len(sensor_foot_ids) != 2:
+            raise RuntimeError(f"Expected two foot bodies in contact sensor, got {sensor_foot_ids}.")
+        cache = (foot_body_ids, sensor_foot_ids)
+        setattr(unwrapped, "_eval_step_policy_foot_id_cache", cache)
+    return cache
+
+
 def _foot_metrics(env, contact_threshold: float) -> dict[str, torch.Tensor]:
     unwrapped = env.unwrapped
     robot = unwrapped.scene["robot"]
     contact_sensor = unwrapped.scene["contact_forces"]
-
-    foot_body_ids = [robot.data.body_names.index(name) for name in FOOT_BODY_NAMES]
-    sensor_foot_ids, _ = contact_sensor.find_bodies(FOOT_BODY_NAMES)
-    if len(sensor_foot_ids) != 2:
-        raise RuntimeError(f"Expected two foot bodies in contact sensor, got {sensor_foot_ids}.")
+    foot_body_ids, sensor_foot_ids = _get_cached_foot_body_ids(env)
 
     swing_command = unwrapped.command_manager.get_command("swing_foot")[:, 0]
     target_xy_b = unwrapped.command_manager.get_command("target_foot_pos_xy")[:, :2]
