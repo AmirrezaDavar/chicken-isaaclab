@@ -15,6 +15,7 @@ from isaaclab.assets import ArticulationCfg
 CHICKEN_CARCASS_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path="my_assets/chicken/chicken/chicken.usd",
+        scale=(0.25, 0.25, 0.25),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             max_depenetration_velocity=5.0,
@@ -27,13 +28,13 @@ CHICKEN_CARCASS_CFG = ArticulationCfg(
             solver_velocity_iteration_count=1,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.02,
-            rest_offset=0.005,
+            contact_offset=0.005,
+            rest_offset=0.001,
         ),
         activate_contact_sensors=False,
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.45, 0.0, 0.15),
+        pos=(0.45, 0.0, 0.05),
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
             "left_hip": 0.0,
@@ -59,6 +60,7 @@ CHICKEN_CARCASS_CFG = ArticulationCfg(
 CHICKEN_BALANCE_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path="my_assets/chicken/chicken/chicken.usd",
+        scale=(0.25, 0.25, 0.25),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             max_depenetration_velocity=5.0,
@@ -71,14 +73,14 @@ CHICKEN_BALANCE_CFG = ArticulationCfg(
             solver_velocity_iteration_count=1,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.02,
-            rest_offset=0.005,
+            contact_offset=0.005,
+            rest_offset=0.001,
         ),
         activate_contact_sensors=False,
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        # Torso spawned ~0.5 m above ground so legs reach the floor on first step
-        pos=(0.0, 0.0, 0.5),
+        # Torso spawned ~0.15 m above ground (scaled down from 0.5 m)
+        pos=(0.0, 0.0, 0.15),
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
             # Slight forward lean on both hips gives a stable base of support
@@ -89,19 +91,19 @@ CHICKEN_BALANCE_CFG = ArticulationCfg(
         },
     ),
     actuators={
-        # Legs: higher stiffness for load-bearing balance control
+        # Legs: scaled down effort limits to match smaller body mass
         "legs": ImplicitActuatorCfg(
             joint_names_expr=["left_hip", "right_hip"],
-            stiffness=80.0,
-            damping=4.0,
-            effort_limit_sim=50.0,
+            stiffness=20.0,
+            damping=1.0,
+            effort_limit_sim=5.0,
         ),
-        # Wings: lower stiffness, used as balance arms
+        # Wings: used as balance arms
         "wings": ImplicitActuatorCfg(
             joint_names_expr=["left_shoulder", "right_shoulder"],
-            stiffness=20.0,
-            damping=2.0,
-            effort_limit_sim=20.0,
+            stiffness=5.0,
+            damping=0.5,
+            effort_limit_sim=2.0,
         ),
     },
 )
