@@ -1,4 +1,4 @@
-# CSCE 50103 — Isaac Lab
+# chicken-isaaclab
 
 GPU-accelerated robot learning built on [NVIDIA Isaac Sim](https://docs.isaacsim.omniverse.nvidia.com/latest/index.html).
 This repo contains custom environments for manipulation, locomotion, and object interaction tasks — including chicken carcass handling, humanoid control, and robotic arm manipulation.
@@ -10,8 +10,8 @@ This repo contains custom environments for manipulation, locomotion, and object 
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/AmirrezaDavar/CSCE50103-IsaacLab.git
-cd CSCE50103-IsaacLab
+git clone https://github.com/AmirrezaDavar/chicken-isaaclab.git
+cd chicken-isaaclab
 ```
 
 ### 2. Activate the virtual environment
@@ -150,6 +150,13 @@ Open `http://localhost:6006` in your browser.
 
 **`ModuleNotFoundError: No module named 'isaaclab'`**
 → Activate the venv first: `source env_isaacsim/bin/activate`
+
+**`[ERROR] Unable to find any Python executable at path: '.../env_isaacsim/bin/python'` (wrong path)**
+→ The `activate` script has the old directory name hardcoded. Fix it once:
+```bash
+sed -i "s|VIRTUAL_ENV='.*env_isaacsim'|VIRTUAL_ENV='$(pwd)/env_isaacsim'|" env_isaacsim/bin/activate
+source env_isaacsim/bin/activate
+```
 
 **`NVML_ERROR_LIB_RM_VERSION_MISMATCH` / CUDA errors**
 → Driver mismatch after a kernel update. Fix: `sudo reboot`

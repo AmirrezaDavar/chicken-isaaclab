@@ -106,4 +106,36 @@ class ClassHumanoidReachDepthPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "class_humanoid_reach_depth"
+        self.max_iterations = 4000
+
+
+@configclass
+class ClassHumanoidPushButtonPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "class_humanoid_push_button"
+        self.max_iterations = 3000
+
+
+@configclass
+class ClassHumanoidShootBallPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "class_humanoid_shoot_ball"
+        self.max_iterations = 3000
+
+
+@configclass
+class ClassHumanoidReachDepthCameraPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "class_humanoid_reach_depth_camera"
+        self.max_iterations = 4000
+
+
+@configclass
+class ClassHumanoidReachLeftFixedPPORunnerCfg(ClassHumanoidTaskPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "class_humanoid_reach_left_fixed"
         self.max_iterations = 2600

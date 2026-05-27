@@ -14,6 +14,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import TiledCameraCfg
 from isaaclab.utils import configclass
 
+import isaaclab.envs.mdp as base_mdp
 import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
 from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 
@@ -22,6 +23,8 @@ from .common import (
     NON_FOOT_FALL_CONTACT_BODY_NAMES,
     RIGHT_ARM_JOINT_NAMES,
     RIGHT_WRIST_BODY_NAME,
+    LEFT_ARM_JOINT_NAMES,
+    LEFT_WRIST_BODY_NAME,
     ClassHumanoidTaskObservationsCfg,
     ClassHumanoidTaskRewardsCfg,
     ClassHumanoidTaskSceneCfg,
@@ -53,13 +56,21 @@ class ReachDepthRewardsCfg(ClassHumanoidTaskRewardsCfg):
         weight=8.0,
         params={
             "target_name": "target",
-            "std": 0.05,
+            "std": 0.08,
+            "asset_cfg": SceneEntityCfg("robot", body_names=[RIGHT_WRIST_BODY_NAME]),
+        },
+    )
+    reach_distance = RewTerm(
+        func=reach_mdp.end_effector_object_distance,
+        weight=-0.5,
+        params={
+            "target_name": "target",
             "asset_cfg": SceneEntityCfg("robot", body_names=[RIGHT_WRIST_BODY_NAME]),
         },
     )
     arm_joint_deviation = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.1,
+        weight=-0.02,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=RIGHT_ARM_JOINT_NAMES)},
     )
     undesired_contacts = RewTerm(
@@ -78,7 +89,7 @@ class ClassHumanoidReachSceneCfg(ClassHumanoidTaskSceneCfg):
 
     target = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Target",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.55, 0.0, 0.95)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.40, -0.08, 0.66)),
         spawn=sim_utils.SphereCfg(
             radius=0.045,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
@@ -90,7 +101,7 @@ class ClassHumanoidReachSceneCfg(ClassHumanoidTaskSceneCfg):
     depth_camera: TiledCameraCfg = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base_link/DepthCamera",
         update_latest_camera_pose=True,
-        offset=TiledCameraCfg.OffsetCfg(pos=(0.24, 0.0, 0.22), rot=(1.0, 0.0, 0.0, 0.0), convention="world"),
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.24, 0.0, 0.22), rot=(0.924, 0.0, -0.383, 0.0), convention="world"),
         data_types=["distance_to_image_plane"],
         depth_clipping_behavior="max",
         spawn=sim_utils.PinholeCameraCfg(
@@ -117,7 +128,7 @@ class ClassHumanoidReachDepthEnvCfg(LocomotionVelocityRoughEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         configure_class_humanoid_flat_scene(self)
-        configure_class_humanoid_task_defaults(self, action_scale=0.35)
+        configure_class_humanoid_task_defaults(self, action_scale=0.5)
 
         self.terminations.base_contact = None
         self.terminations.bad_orientation.params["limit_angle"] = 0.8
@@ -126,18 +137,19 @@ class ClassHumanoidReachDepthEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.actions.joint_pos = mdp.JointPositionActionCfg(
             asset_name="robot",
             joint_names=RIGHT_ARM_JOINT_NAMES,
-            scale=0.35,
+            scale=0.5,
             use_default_offset=True,
         )
         self.observations.policy.target_pos_base_from_depth = ObsTerm(
-            func=mdp.generated_commands, params={"command_name": "target_pos_base_from_depth"}
+            func=reach_mdp.target_pos_base,
+            params={"target_name": "target"},
         )
         self.events.reset_target = EventTerm(
             func=mdp.reset_root_state_uniform,
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("target"),
-                "pose_range": {"x": (0.45, 0.70), "y": (-0.22, 0.22), "z": (0.82, 1.02)},
+                "pose_range": {"x": (0.30, 0.50), "y": (-0.15, 0.0), "z": (0.60, 0.72)},
                 "velocity_range": {
                     "x": (0.0, 0.0),
                     "y": (0.0, 0.0),
@@ -145,6 +157,78 @@ class ClassHumanoidReachDepthEnvCfg(LocomotionVelocityRoughEnvCfg):
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (0.0, 0.0),
+                },
+            },
+        )
+
+
+@configclass
+class ClassHumanoidReachDepthCameraEnvCfg(ClassHumanoidReachDepthEnvCfg):
+    """Reach task where the policy observes the target via the depth camera.
+
+    The DepthTargetPosCommand reads the depth image each step, finds the nearest
+    object (the red target sphere), and produces a smoothed 3-D position estimate
+    in the robot base frame. That estimate — NOT the ground-truth position — is
+    what the policy receives as input. Training requires --enable_cameras.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        # Fix the base so the policy only needs to learn arm control, not balance
+        self.scene.robot.spawn.fix_base_link = True
+
+        # Replace ground-truth target position with depth-camera-derived estimate.
+        # mdp.generated_commands reads the output of DepthTargetPosCommand,
+        # which is already temporally smoothed (smooth_factor=0.75).
+        self.observations.policy.target_pos_base_from_depth = ObsTerm(
+            func=base_mdp.generated_commands,
+            params={"command_name": "target_pos_base_from_depth"},
+        )
+
+        # Fewer envs — camera rendering is expensive
+        self.scene.num_envs = 512
+
+
+@configclass
+class ClassHumanoidReachLeftFixedEnvCfg(ClassHumanoidReachDepthEnvCfg):
+    """Left-arm reaching with a fixed base — robot floats in place, only arm moves."""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        # Fix the robot base so balance is not required
+        self.scene.robot.spawn.fix_base_link = True
+
+        # Switch to left arm joints
+        self.actions.joint_pos = mdp.JointPositionActionCfg(
+            asset_name="robot",
+            joint_names=LEFT_ARM_JOINT_NAMES,
+            scale=0.5,
+            use_default_offset=True,
+        )
+
+        # Reward uses left wrist
+        self.rewards.reach_target.params["asset_cfg"] = SceneEntityCfg(
+            "robot", body_names=[LEFT_WRIST_BODY_NAME]
+        )
+        self.rewards.reach_distance.params["asset_cfg"] = SceneEntityCfg(
+            "robot", body_names=[LEFT_WRIST_BODY_NAME]
+        )
+        self.rewards.arm_joint_deviation.params["asset_cfg"] = SceneEntityCfg(
+            "robot", joint_names=LEFT_ARM_JOINT_NAMES
+        )
+
+        # Target spawns on the left side (positive y)
+        self.events.reset_target = EventTerm(
+            func=mdp.reset_root_state_uniform,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("target"),
+                "pose_range": {"x": (0.30, 0.50), "y": (0.05, 0.20), "z": (0.60, 0.72)},
+                "velocity_range": {
+                    "x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0),
+                    "roll": (0.0, 0.0), "pitch": (0.0, 0.0), "yaw": (0.0, 0.0),
                 },
             },
         )

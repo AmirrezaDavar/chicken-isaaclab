@@ -6,3 +6,4 @@
 """Manipulation environments for fixed-arm robots."""
 
 from .reach import *  # noqa
+from .chicken_lift.config.ur10e import *  # noqa: registers Isaac-Lift-Chicken-UR10e-v0

@@ -134,3 +134,43 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidReachDepthPPORunnerCfg",
     },
 )
+
+gym.register(
+    id="Isaac-PushButton-ClassHumanoid-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.push_button_env_cfg:ClassHumanoidPushButtonEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidPushButtonPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-ShootBall-ClassHumanoid-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.shoot_ball_env_cfg:ClassHumanoidShootBallEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidShootBallPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-ReachDepthCamera-ClassHumanoid-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.reach_env_cfg:ClassHumanoidReachDepthCameraEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidReachDepthCameraPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-ReachLeft-Fixed-ClassHumanoid-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.reach_env_cfg:ClassHumanoidReachLeftFixedEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ClassHumanoidReachLeftFixedPPORunnerCfg",
+    },
+)

@@ -8,3 +8,5 @@ Config-based workflow environments.
 """
 
 import gymnasium as gym
+
+from .chicken_balance.config.chicken import *  # noqa: registers Isaac-Balance-Chicken-v0

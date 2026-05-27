@@ -37,6 +37,16 @@ RIGHT_ARM_JOINT_NAMES = [
     "Right_Wrist_RS00",
 ]
 RIGHT_WRIST_BODY_NAME = "Wrist_Right_1"
+
+LEFT_ARM_JOINT_NAMES = [
+    "Left_Shoulder_Pitch_RS03",
+    "Left_Shoulder_Roll_RS03",
+    "Left_Shoulder_Yaw_RS02",
+    "Left_Elbow_RS02",
+    "Left_Wrist_RS00",
+]
+LEFT_WRIST_BODY_NAME = "Wrist_Left_1"
+
 NON_FOOT_FALL_CONTACT_BODY_NAMES = [
     "base_link",
     "Head_1",
