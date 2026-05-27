@@ -11,14 +11,32 @@ The following configuration parameters are available:
 * :obj:`UR10_CFG`: The UR10 arm without a gripper.
 * :obj:`UR10E_ROBOTIQ_GRIPPER_CFG`: The UR10E arm with Robotiq_2f_140 gripper.
 * :obj:`UR10e_ROBOTIQ_2F_85_CFG`: The UR10E arm with Robotiq 2F-85 gripper.
+* :obj:`UR10e_CUSTOM_GRIPPER_CFG`: The UR10e arm with the custom 4-jaw parallel gripper from
+  Universal_Robots_ROS2_Description/urdf/1_fixed.usda.
 
 Reference: https://github.com/ros-industrial/universal_robot
 """
+
+import os
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
+
+# Absolute path to the local USDA for UR10e + custom gripper.
+# universal_robots.py lives at source/isaaclab_assets/isaaclab_assets/robots/
+# so 5 dirname calls reach the repo root.
+_REPO_ROOT = os.path.dirname(
+    os.path.dirname(
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+    )
+)
+_UR10E_CUSTOM_GRIPPER_USD = os.path.join(
+    _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "1_fixed.usda"
+)
 
 ##
 # Configuration
@@ -205,3 +223,82 @@ UR10e_ROBOTIQ_2F_85_CFG.actuators["gripper_passive"] = ImplicitActuatorCfg(
 )
 
 """Configuration of UR-10E arm with Robotiq 2F-85 gripper."""
+
+
+UR10e_CUSTOM_GRIPPER_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=_UR10E_CUSTOM_GRIPPER_USD,
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=True,
+            max_depenetration_velocity=5.0,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=1000.0,
+            max_angular_velocity=3666.0,
+            enable_gyroscopic_forces=True,
+            solver_position_iteration_count=8,
+            solver_velocity_iteration_count=1,
+            max_contact_impulse=1e32,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=False,
+            solver_position_iteration_count=8,
+            solver_velocity_iteration_count=1,
+        ),
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            contact_offset=0.005, rest_offset=0.0
+        ),
+        activate_contact_sensors=False,
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.0),
+        rot=(1.0, 0.0, 0.0, 0.0),
+        joint_pos={
+            "shoulder_pan_joint": 0.0,
+            "shoulder_lift_joint": -1.5708,
+            "elbow_joint": 1.5708,
+            "wrist_1_joint": -1.5708,
+            "wrist_2_joint": -1.5708,
+            "wrist_3_joint": 0.0,
+            # Gripper open: all prismatic joints at 0 (upper limit)
+            "PrismaticJoint1": 0.0,
+            "PrismaticJoint2": 0.0,
+            "PrismaticJoint3": 0.0,
+            "PrismaticJoint4": 0.0,
+        },
+    ),
+    actuators={
+        "shoulder": ImplicitActuatorCfg(
+            joint_names_expr=["shoulder_.*"],
+            stiffness=1320.0,
+            damping=72.66,
+            friction=0.0,
+            armature=0.0,
+        ),
+        "elbow": ImplicitActuatorCfg(
+            joint_names_expr=["elbow_joint"],
+            stiffness=600.0,
+            damping=34.64,
+            friction=0.0,
+            armature=0.0,
+        ),
+        "wrist": ImplicitActuatorCfg(
+            joint_names_expr=["wrist_.*"],
+            stiffness=216.0,
+            damping=29.39,
+            friction=0.0,
+            armature=0.0,
+        ),
+        # 4 parallel prismatic fingers — controlled together as open/close
+        "gripper": ImplicitActuatorCfg(
+            joint_names_expr=["PrismaticJoint.*"],
+            effort_limit_sim=35.0,
+            velocity_limit_sim=0.5,
+            stiffness=2500.0,
+            damping=120.0,
+            friction=0.0,
+            armature=0.0,
+        ),
+    },
+)
+"""UR10e arm with custom 4-jaw parallel gripper (PrismaticJoint1-4, range [−9.3 mm, 0])."""

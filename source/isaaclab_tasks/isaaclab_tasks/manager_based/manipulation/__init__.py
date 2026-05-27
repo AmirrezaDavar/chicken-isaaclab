@@ -7,3 +7,4 @@
 
 from .reach import *  # noqa
 from .chicken_lift.config.ur10e import *  # noqa: registers Isaac-Lift-Chicken-UR10e-v0
+from .chicken_lift.config.ur10e_custom_gripper import *  # noqa: registers Isaac-Lift-Chicken-UR10e-CustomGripper-v0

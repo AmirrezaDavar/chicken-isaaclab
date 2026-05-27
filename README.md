@@ -86,7 +86,7 @@ A chicken character learns to balance and locomote on flat terrain.
 
 ### Chicken Lift with UR10e — `Isaac-Lift-Chicken-UR10e-v0`
 
-A UR10e robotic arm with gripper learns to grasp and lift a chicken carcass from a table.
+A UR10e robotic arm with Robotiq 2F-85 gripper learns to grasp and lift a chicken carcass from a table.
 
 | | |
 |---|---|
@@ -99,6 +99,36 @@ A UR10e robotic arm with gripper learns to grasp and lift a chicken carcass from
 ./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
   --headless --num_envs 1024 --task Isaac-Lift-Chicken-UR10e-v0 \
   +run_name=ur10e_lift_v1
+```
+
+---
+
+### Chicken Lift with UR10e + Custom 4-Jaw Gripper — `Isaac-Lift-Chicken-UR10e-CustomGripper-v0`
+
+A UR10e arm with a custom parallel 4-jaw gripper (4 prismatic joints, ±9.3 mm stroke) learns to
+grasp and lift a chicken carcass.
+
+**Asset dependency:** requires `Universal_Robots_ROS2_Description/urdf/` to be present locally
+(USD files are gitignored). The folder must live at the repo root.
+
+| | |
+|---|---|
+| Task ID (train) | `Isaac-Lift-Chicken-UR10e-CustomGripper-v0` |
+| Task ID (play) | `Isaac-Lift-Chicken-UR10e-CustomGripper-Play-v0` |
+| Log dir | `logs/rsl_rl/ur10e_custom_gripper_chicken_lift/` |
+| Max iterations | 2000 |
+
+```bash
+# Train
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
+  --headless --num_envs 512 --task Isaac-Lift-Chicken-UR10e-CustomGripper-v0 \
+  +run_name=custom_gripper_v1
+
+# Play (after training produces checkpoints)
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
+  --num_envs 16 --task Isaac-Lift-Chicken-UR10e-CustomGripper-Play-v0 \
+  agent.resume=true "agent.load_run=.*custom_gripper_v1" \
+  agent.load_checkpoint=model_0050.pt
 ```
 
 ---
@@ -125,6 +155,7 @@ A UR10e robotic arm with gripper learns to grasp and lift a chicken carcass from
 ```bash
 tensorboard --logdir logs/rsl_rl/chicken_balance
 tensorboard --logdir logs/rsl_rl/ur10e_chicken_lift
+tensorboard --logdir logs/rsl_rl/ur10e_custom_gripper_chicken_lift
 ```
 
 Open `http://localhost:6006` in your browser.
@@ -139,10 +170,14 @@ Open `http://localhost:6006` in your browser.
 | `source/isaaclab_tasks/.../chicken_balance/chicken_balance_env_cfg.py` | Balance env rewards & observations |
 | `source/isaaclab_tasks/.../chicken_balance/config/chicken/flat_env_cfg.py` | Flat terrain config |
 | `source/isaaclab_tasks/.../chicken_balance/config/chicken/agents/rsl_rl_ppo_cfg.py` | PPO config for balance |
-| `source/isaaclab_tasks/.../chicken_lift/chicken_lift_env_cfg.py` | Lift env rewards & observations |
-| `source/isaaclab_tasks/.../chicken_lift/config/ur10e/joint_pos_env_cfg.py` | UR10e + gripper + table config |
-| `source/isaaclab_tasks/.../chicken_lift/config/ur10e/agents/rsl_rl_ppo_cfg.py` | PPO config for lift |
-| `my_assets/chicken/` | USD mesh files for the chicken |
+| `source/isaaclab_tasks/.../chicken_lift/chicken_lift_env_cfg.py` | Lift env rewards & observations (shared base) |
+| `source/isaaclab_tasks/.../chicken_lift/config/ur10e/joint_pos_env_cfg.py` | UR10e + Robotiq 2F-85 config |
+| `source/isaaclab_tasks/.../chicken_lift/config/ur10e/agents/rsl_rl_ppo_cfg.py` | PPO config for Robotiq lift |
+| `source/isaaclab_tasks/.../chicken_lift/config/ur10e_custom_gripper/joint_pos_env_cfg.py` | UR10e + custom 4-jaw gripper config |
+| `source/isaaclab_tasks/.../chicken_lift/config/ur10e_custom_gripper/agents/rsl_rl_ppo_cfg.py` | PPO config for custom gripper lift |
+| `source/isaaclab_assets/.../robots/universal_robots.py` | All UR robot asset configs incl. `UR10e_CUSTOM_GRIPPER_CFG` |
+| `Universal_Robots_ROS2_Description/urdf/1_fixed.usda` | UR10e + custom gripper scene USD (not in git) |
+| `my_assets/chicken/` | USD mesh files for the chicken (not in git) |
 
 ---
 
