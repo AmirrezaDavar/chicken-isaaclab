@@ -13,9 +13,8 @@ class ChickenLiftPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
-        actor_obs_normalization=False,
-        critic_obs_normalization=False,
-        # deeper network: task needs to remember jaw state across time steps
+        actor_obs_normalization=True,   # running mean/std normalisation — prevents raw velocity spikes from diverging the network
+        critic_obs_normalization=True,
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
@@ -25,13 +24,13 @@ class ChickenLiftPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.008,       # slightly higher entropy to explore jaw sequences
+        entropy_coef=0.008,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=1.0e-4,
         schedule="adaptive",
-        gamma=0.99,               # higher discount: reward sequence spans full episode
+        gamma=0.98,             # slightly lower discount keeps value targets small and stable
         lam=0.95,
         desired_kl=0.01,
-        max_grad_norm=1.0,
+        max_grad_norm=0.5,      # tighter gradient clip catches early instability
     )

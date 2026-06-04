@@ -148,9 +148,9 @@ class ObservationsCfg:
             params={"robot_cfg": SceneEntityCfg("robot")},
         )
         # chicken root linear velocity (3D)
-        # non-zero = chicken is moving with the arm → grasp is holding
-        # zero = grasp slipped or not yet made
-        chicken_vel = ObsTerm(func=chicken_mdp.chicken_root_velocity)
+        # Clipped to ±5 m/s: physics glitches can spike velocity to 100+ m/s without this,
+        # feeding a huge value into the network and causing value loss → inf.
+        chicken_vel = ObsTerm(func=chicken_mdp.chicken_root_velocity, clip=(-5.0, 5.0))
         # desired carry position
         target_object_position = ObsTerm(
             func=mdp.generated_commands, params={"command_name": "object_pose"}
@@ -348,15 +348,20 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    """Gradually increase regularisation penalty during training."""
+    """Gradually increase regularisation penalty during training.
+
+    num_steps is in environment steps.  With 1024 envs × 32 steps/iter = 32768 steps/iter,
+    50_000_000 steps ≈ 1525 iterations — a gentle ramp across ~30% of training.
+    Final weights are kept small (-1e-3) so they never dominate the task reward.
+    """
 
     action_rate = CurrTerm(
         func=mdp.modify_reward_weight,
-        params={"term_name": "action_rate", "weight": -1e-1, "num_steps": 10_000},
+        params={"term_name": "action_rate", "weight": -1e-3, "num_steps": 50_000_000},
     )
     joint_vel = CurrTerm(
         func=mdp.modify_reward_weight,
-        params={"term_name": "joint_vel", "weight": -1e-1, "num_steps": 10_000},
+        params={"term_name": "joint_vel", "weight": -1e-3, "num_steps": 50_000_000},
     )
 
 
