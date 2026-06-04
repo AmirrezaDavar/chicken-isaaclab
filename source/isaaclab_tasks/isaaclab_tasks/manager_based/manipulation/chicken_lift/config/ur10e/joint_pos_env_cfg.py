@@ -1,11 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""UR10e + Robotiq 2F-85 configuration for the chicken pick-and-place task.
+"""UR10e + custom 2-jaw parallel gripper — sequential left-then-right leg grasping.
 
-This file wires together:
-  * UR10e_ROBOTIQ_2F_85_CFG  – robot already defined in this project
-  * CHICKEN_CARCASS_CFG      – passive articulation from my_assets
-  * ChickenLiftEnvCfg        – base scene / MDP
+The custom gripper (1_fixed.usda) has 4 prismatic joints split into two jaws:
+  Left jaw  – PrismaticJoint1 + PrismaticJoint2  (grasps the chicken's left leg)
+  Right jaw – PrismaticJoint3 + PrismaticJoint4  (grasps the chicken's right leg)
+
+Training behaviour (shaped by SequentialGraspRewardsCfg):
+  1. EE approaches the chicken.
+  2. Policy closes the LEFT jaw on the left leg — rewarded by left_leg_grasped.
+  3. Once the left jaw is gripping, right_jaw_gated becomes active and the
+     policy closes the RIGHT jaw on the right leg.
+  4. With at least the left leg secured, lifting_gated fires and the robot
+     raises the chicken off the table.
 """
 
 import isaaclab.sim as sim_utils
@@ -17,77 +24,53 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils import configclass
 
 import isaaclab.envs.mdp as mdp
-from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import ChickenLiftEnvCfg
+from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import (
+    ChickenSequentialGraspEnvCfg,
+)
 
-from isaaclab_assets.robots.universal_robots import UR10e_ROBOTIQ_2F_85_CFG  # isort: skip
+from isaaclab_assets.robots.universal_robots import UR10e_CUSTOM_GRIPPER_CFG  # isort: skip
 from isaaclab_assets.robots.chicken import CHICKEN_CARCASS_CFG  # isort: skip
+
+# Prismatic joint travel: 0 = open, −9.3 mm = fully closed
+_OPEN = 0.0
+_CLOSE = -0.0093
 
 
 @configclass
-class UR10eChickenLiftEnvCfg(ChickenLiftEnvCfg):
-    """UR10e + Robotiq 2F-85 lifting a chicken carcass."""
+class UR10eChickenLiftEnvCfg(ChickenSequentialGraspEnvCfg):
+    """UR10e with custom 2-jaw gripper, sequential left-then-right leg grasp."""
 
     def __post_init__(self):
         super().__post_init__()
 
         # ---- Robot -------------------------------------------------------
-        self.scene.robot = UR10e_ROBOTIQ_2F_85_CFG.replace(
+        self.scene.robot = UR10e_CUSTOM_GRIPPER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
-            spawn=UR10e_ROBOTIQ_2F_85_CFG.spawn.replace(
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    disable_gravity=True,
-                    max_depenetration_velocity=5.0,
-                    linear_damping=0.0,
-                    angular_damping=0.0,
-                    max_linear_velocity=1000.0,
-                    max_angular_velocity=3666.0,
-                    enable_gyroscopic_forces=True,
-                    solver_position_iteration_count=8,
-                    solver_velocity_iteration_count=1,
-                    max_contact_impulse=1e32,
-                ),
-                articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-                    enabled_self_collisions=False,
-                    solver_position_iteration_count=8,
-                    solver_velocity_iteration_count=1,
-                ),
-                collision_props=sim_utils.CollisionPropertiesCfg(
-                    contact_offset=0.005, rest_offset=0.0
-                ),
-            ),
             init_state=ArticulationCfg.InitialStateCfg(
                 pos=(0.0, 0.0, 0.0),
                 rot=(1.0, 0.0, 0.0, 0.0),
                 joint_pos={
-                    # arm at a neutral overhead pose
                     "shoulder_pan_joint": 0.0,
                     "shoulder_lift_joint": -1.5708,
                     "elbow_joint": 1.5708,
                     "wrist_1_joint": -1.5708,
                     "wrist_2_joint": -1.5708,
                     "wrist_3_joint": 0.0,
-                    # gripper open
-                    "finger_joint": 0.0,
+                    "PrismaticJoint1": _OPEN,
+                    "PrismaticJoint2": _OPEN,
+                    "PrismaticJoint3": _OPEN,
+                    "PrismaticJoint4": _OPEN,
                 },
             ),
         )
 
-        # Override gripper actuators for better contact stability on soft objects
-        self.scene.robot.actuators["gripper_drive"] = ImplicitActuatorCfg(
-            joint_names_expr=["finger_joint"],
-            effort_limit_sim=20.0,
-            velocity_limit_sim=1.0,
-            stiffness=40.0,
-            damping=1.0,
-            friction=0.0,
-            armature=0.0,
-        )
-        self.scene.robot.actuators["gripper_finger"] = ImplicitActuatorCfg(
-            joint_names_expr=[".*_inner_finger_joint"],
-            effort_limit_sim=20.0,
-            velocity_limit_sim=10.0,
-            stiffness=10.0,
-            damping=0.05,
+        # Override gripper actuators: higher stiffness + damping for stable grasping
+        self.scene.robot.actuators["gripper"] = ImplicitActuatorCfg(
+            joint_names_expr=["PrismaticJoint.*"],
+            effort_limit_sim=40.0,
+            velocity_limit_sim=0.15,
+            stiffness=3000.0,
+            damping=250.0,
             friction=0.0,
             armature=0.0,
         )
@@ -97,24 +80,25 @@ class UR10eChickenLiftEnvCfg(ChickenLiftEnvCfg):
             prim_path="{ENV_REGEX_NS}/Chicken"
         )
 
-        # ---- End-effector frame tracking gripper tip ----------------------
+        # ---- End-effector frame (centre of gripper palm) -----------------
         marker_cfg = FRAME_MARKER_CFG.copy()
         marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
         marker_cfg.prim_path = "/Visuals/FrameTransformer"
         self.scene.ee_frame = FrameTransformerCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/base_link",
+            prim_path="{ENV_REGEX_NS}/Robot/ur10e/base_link",
             debug_vis=False,
             visualizer_cfg=marker_cfg,
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/Robot/wrist_3_link",
+                    prim_path="{ENV_REGEX_NS}/Robot/ur10e/wrist_3_link",
                     name="end_effector",
-                    offset=OffsetCfg(pos=[0.0, 0.0, 0.13]),
+                    # 18 cm offset along wrist z to reach the gripper palm centre
+                    offset=OffsetCfg(pos=[0.0, 0.0, 0.18]),
                 ),
             ],
         )
 
-        # ---- Actions: 6-DOF arm (joint pos) + binary gripper --------------
+        # ---- Actions: 6-DOF arm + independent left/right jaw --------------
         self.actions.arm_action = mdp.JointPositionActionCfg(
             asset_name="robot",
             joint_names=[
@@ -128,20 +112,44 @@ class UR10eChickenLiftEnvCfg(ChickenLiftEnvCfg):
             scale=0.5,
             use_default_offset=True,
         )
-        self.actions.gripper_action = mdp.BinaryJointPositionActionCfg(
+
+        # Left jaw: PrismaticJoint1 + PrismaticJoint2
+        # Policy uses this to grab the LEFT leg first
+        self.actions.gripper_left_action = mdp.BinaryJointPositionActionCfg(
             asset_name="robot",
-            joint_names=["finger_joint"],
-            open_command_expr={"finger_joint": 0.0},
-            close_command_expr={"finger_joint": 0.8},
+            joint_names=["PrismaticJoint1", "PrismaticJoint2"],
+            open_command_expr={
+                "PrismaticJoint1": _OPEN,
+                "PrismaticJoint2": _OPEN,
+            },
+            close_command_expr={
+                "PrismaticJoint1": _CLOSE,
+                "PrismaticJoint2": _CLOSE,
+            },
         )
 
-        # ---- Command target frame -----------------------------------------
+        # Right jaw: PrismaticJoint3 + PrismaticJoint4
+        # Policy closes this AFTER the left jaw is gripping
+        self.actions.gripper_right_action = mdp.BinaryJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=["PrismaticJoint3", "PrismaticJoint4"],
+            open_command_expr={
+                "PrismaticJoint3": _OPEN,
+                "PrismaticJoint4": _OPEN,
+            },
+            close_command_expr={
+                "PrismaticJoint3": _CLOSE,
+                "PrismaticJoint4": _CLOSE,
+            },
+        )
+
+        # ---- Command target (carry-goal visualisation off by default) -----
         self.commands.object_pose.body_name = "wrist_3_link"
 
 
 @configclass
 class UR10eChickenLiftEnvCfg_PLAY(UR10eChickenLiftEnvCfg):
-    """Smaller scene for visualisation / play."""
+    """Small scene for play / evaluation."""
 
     def __post_init__(self):
         super().__post_init__()

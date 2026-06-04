@@ -6,17 +6,18 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 
 @configclass
 class ChickenLiftPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    num_steps_per_env = 24
-    max_iterations = 2000
-    save_interval = 50
-    experiment_name = "ur10e_chicken_lift"
+    num_steps_per_env = 32        # more steps → better advantage estimates for long horizon
+    max_iterations = 5000         # sequential task needs more training than single-grasp
+    save_interval = 100
+    experiment_name = "ur10e_chicken_seq_grasp"
 
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
         actor_obs_normalization=False,
         critic_obs_normalization=False,
-        actor_hidden_dims=[256, 128, 64],
-        critic_hidden_dims=[256, 128, 64],
+        # deeper network: task needs to remember jaw state across time steps
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
         activation="elu",
     )
 
@@ -24,12 +25,12 @@ class ChickenLiftPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.006,
+        entropy_coef=0.008,       # slightly higher entropy to explore jaw sequences
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=1.0e-4,
         schedule="adaptive",
-        gamma=0.98,
+        gamma=0.99,               # higher discount: reward sequence spans full episode
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,

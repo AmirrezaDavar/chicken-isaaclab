@@ -1,23 +1,24 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Base environment config for UR10e + Robotiq gripper lifting a chicken carcass.
+"""Base environment config for UR10e + custom gripper lifting a chicken carcass.
 
 Scene layout
 ------------
-* robot  – UR10e with Robotiq gripper (set by concrete subclass)
-* ee_frame – FrameTransformer tracking the gripper tip  (set by subclass)
-* chicken – passive articulation; legs/wings randomised at every reset
-* table  – Seattle Lab Table from Nucleus
-* plane  – infinite ground plane
-* light  – dome light
+* robot   – UR10e with gripper (set by concrete subclass)
+* ee_frame – FrameTransformer tracking the gripper tip (set by subclass)
+* chicken  – passive articulation; legs/wings randomised at every reset
+* plane   – infinite ground plane
+* light   – dome light
 
-MDP
----
-* observations : joint_pos, joint_vel, chicken torso pos in robot frame,
-                 target pos (command), last action
-* rewards      : reach chicken, lift chicken, track goal, action/vel penalty
-* events       : reset chicken position (uniform on table) + joint randomisation
-* terminations : timeout, chicken dropped below table
+Two reward suites are provided:
+  RewardsCfg              – generic reach/lift/goal tracking (original).
+  SequentialGraspRewardsCfg – phased rewards that guide the policy to first
+                               close the left jaw on the left leg, then the
+                               right jaw on the right leg, then lift.
+
+Two action suites:
+  ActionsCfg              – single unified gripper_action (original).
+  SequentialActionsCfg    – independent gripper_left_action + gripper_right_action.
 """
 
 from dataclasses import MISSING
@@ -34,11 +35,11 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
-from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
+from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from isaaclab_tasks.manager_based.manipulation.lift import mdp as lift_mdp
+from isaaclab_tasks.manager_based.manipulation.chicken_lift import mdp as chicken_mdp
 
 import isaaclab.envs.mdp as mdp
 
@@ -55,14 +56,7 @@ class ChickenLiftSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = MISSING
     ee_frame: FrameTransformerCfg = MISSING
 
-    # Chicken is an articulation so its leg/wing joints are simulated.
     chicken: ArticulationCfg = MISSING
-
-    table = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Table",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.5, 0, 0], rot=[0.707, 0, 0, 0.707]),
-        spawn=UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd"),
-    )
 
     plane = AssetBaseCfg(
         prim_path="/World/GroundPlane",
@@ -87,9 +81,9 @@ class CommandsCfg:
 
     object_pose = mdp.UniformPoseCommandCfg(
         asset_name="robot",
-        body_name=MISSING,  # set by subclass (e.g. "wrist_3_link")
+        body_name=MISSING,
         resampling_time_range=(5.0, 5.0),
-        debug_vis=True,
+        debug_vis=False,  # set True to see the black goal-pose cylinder
         ranges=mdp.UniformPoseCommandCfg.Ranges(
             pos_x=(0.35, 0.65),
             pos_y=(-0.3, 0.3),
@@ -101,29 +95,63 @@ class CommandsCfg:
     )
 
 
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+
+
 @configclass
 class ActionsCfg:
-    """UR10e arm + gripper actions.  Filled in by subclass."""
+    """Single unified gripper action (original, for backward-compatible configs)."""
 
     arm_action: mdp.JointPositionActionCfg | mdp.DifferentialInverseKinematicsActionCfg = MISSING
-    gripper_action: mdp.BinaryJointPositionActionCfg = MISSING
+    gripper_action: mdp.BinaryJointPositionActionCfg | None = None
+
+
+@configclass
+class SequentialActionsCfg:
+    """Independent left-jaw and right-jaw actions for sequential grasping."""
+
+    arm_action: mdp.JointPositionActionCfg | mdp.DifferentialInverseKinematicsActionCfg = MISSING
+    gripper_left_action: mdp.BinaryJointPositionActionCfg = MISSING
+    gripper_right_action: mdp.BinaryJointPositionActionCfg = MISSING
+
+
+# ---------------------------------------------------------------------------
+# Observations
+# ---------------------------------------------------------------------------
 
 
 @configclass
 class ObservationsCfg:
-    """Policy observations."""
+    """Policy observations (works for both single-jaw and dual-jaw configs)."""
 
     @configclass
     class PolicyCfg(ObsGroup):
-        # 6 arm joints
+        # 6 arm + 4 gripper prismatic joints
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        # chicken torso position in robot root frame
+        # chicken torso in robot root frame
         object_position = ObsTerm(
             func=lift_mdp.object_position_in_robot_root_frame,
             params={"object_cfg": SceneEntityCfg("chicken")},
         )
-        # desired carry position (3-D)
+        # both leg positions in robot root frame (6D)
+        chicken_legs = ObsTerm(
+            func=chicken_mdp.chicken_legs_in_robot_frame,
+            params={"robot_cfg": SceneEntityCfg("robot")},
+        )
+        # chicken body orientation in robot frame (4D quaternion)
+        # lets the policy distinguish left/right leg regardless of how the chicken landed
+        chicken_orient = ObsTerm(
+            func=chicken_mdp.chicken_orientation,
+            params={"robot_cfg": SceneEntityCfg("robot")},
+        )
+        # chicken root linear velocity (3D)
+        # non-zero = chicken is moving with the arm → grasp is holding
+        # zero = grasp slipped or not yet made
+        chicken_vel = ObsTerm(func=chicken_mdp.chicken_root_velocity)
+        # desired carry position
         target_object_position = ObsTerm(
             func=mdp.generated_commands, params={"command_name": "object_pose"}
         )
@@ -136,29 +164,27 @@ class ObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
 
 
+# ---------------------------------------------------------------------------
+# Events
+# ---------------------------------------------------------------------------
+
+
 @configclass
 class EventCfg:
     """Reset events."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    # Randomise chicken position on the table surface.
     reset_chicken_position = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {
-                "x": (-0.1, 0.1),
-                "y": (-0.2, 0.2),
-                "z": (0.0, 0.0),
-            },
+            "pose_range": {"x": (-0.1, 0.1), "y": (-0.2, 0.2), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("chicken"),
         },
     )
 
-    # Randomise chicken leg and wing joint angles at reset.
-    # joints default to 0; offset [-1.0, 1.0] rad covers most of the ±1.57 range.
     randomise_chicken_joints = EventTerm(
         func=mdp.reset_joints_by_offset,
         mode="reset",
@@ -173,31 +199,27 @@ class EventCfg:
     )
 
 
+# ---------------------------------------------------------------------------
+# Rewards – original generic version
+# ---------------------------------------------------------------------------
+
+
 @configclass
 class RewardsCfg:
-    """Shaped rewards for pick-and-place."""
+    """Shaped rewards for generic pick-and-place (single unified gripper)."""
 
-    # Dense: approach the chicken
     reaching_object = RewTerm(
         func=lift_mdp.object_ee_distance,
-        params={
-            "std": 0.1,
-            "object_cfg": SceneEntityCfg("chicken"),
-        },
+        params={"std": 0.1, "object_cfg": SceneEntityCfg("chicken")},
         weight=1.0,
     )
 
-    # Sparse: chicken torso above table
     lifting_object = RewTerm(
         func=lift_mdp.object_is_lifted,
-        params={
-            "minimal_height": 0.06,
-            "object_cfg": SceneEntityCfg("chicken"),
-        },
+        params={"minimal_height": 0.06, "object_cfg": SceneEntityCfg("chicken")},
         weight=15.0,
     )
 
-    # Dense: track carry goal once lifted
     object_goal_tracking = RewTerm(
         func=lift_mdp.object_goal_distance,
         params={
@@ -220,7 +242,6 @@ class RewardsCfg:
         weight=5.0,
     )
 
-    # Regularisation
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
@@ -229,20 +250,100 @@ class RewardsCfg:
     )
 
 
+# ---------------------------------------------------------------------------
+# Rewards – sequential two-jaw version
+# ---------------------------------------------------------------------------
+
+
+@configclass
+class SequentialGraspRewardsCfg:
+    """Phased rewards for sequential left-then-right jaw grasping.
+
+    Reward flow:
+      1. approaching_chicken  – dense EE-to-body approach signal (always on)
+      2. left_jaw_closing     – continuous reward for closing the left jaw
+      3. left_leg_grasped     – proximity-to-left-leg × left-jaw-closure
+      4. right_jaw_gated      – right-jaw signal, scaled by left_grasped gate
+      5. lifting_gated        – sparse lift reward, enabled once left jaw ≥ 30% closed
+      6. goal_tracking_gated  – carry reward, enabled once left jaw ≥ 30% closed
+      7. action_rate / joint_vel regularisation (curriculum-ramp to higher weights)
+    """
+
+    # Phase 0: keep the EE approaching the chicken body
+    approaching_chicken = RewTerm(
+        func=lift_mdp.object_ee_distance,
+        params={"std": 0.12, "object_cfg": SceneEntityCfg("chicken")},
+        weight=1.0,
+    )
+
+    # Phase 1a: reward the policy for closing the left jaw at all
+    left_jaw_closing = RewTerm(
+        func=chicken_mdp.left_jaw_closing_reward,
+        weight=2.0,
+    )
+
+    # Phase 1b: proximity to left leg × left jaw closure → peak reward when grasping
+    left_leg_grasped = RewTerm(
+        func=chicken_mdp.left_leg_grasped_reward,
+        params={"std": 0.06},
+        weight=12.0,
+    )
+
+    # Phase 2: right jaw on right leg, gated by left_grasped
+    right_jaw_gated = RewTerm(
+        func=chicken_mdp.right_jaw_gated_reward,
+        params={"std": 0.06},
+        weight=10.0,
+    )
+
+    # Phase 3: lift the chicken — only rewarded once the left jaw is active
+    lifting_gated = RewTerm(
+        func=chicken_mdp.chicken_lifted_gated,
+        params={"minimal_height": 0.06, "gate_threshold": 0.3},
+        weight=20.0,
+    )
+
+    # Bonus: carry the chicken to the commanded pose (only useful after grasping)
+    goal_tracking_gated = RewTerm(
+        func=chicken_mdp.chicken_goal_tracking_gated,
+        params={
+            "std": 0.3,
+            "minimal_height": 0.06,
+            "command_name": "object_pose",
+            "gate_threshold": 0.3,
+        },
+        weight=8.0,
+    )
+
+    # Regularisation (curriculum ramps these up during training)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+    joint_vel = RewTerm(
+        func=mdp.joint_vel_l2,
+        weight=-1e-4,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Terminations
+# ---------------------------------------------------------------------------
+
+
 @configclass
 class TerminationsCfg:
     """Episode terminations."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    # End episode if the chicken falls below the table edge
     object_dropping = DoneTerm(
         func=mdp.root_height_below_minimum,
-        params={
-            "minimum_height": -0.05,
-            "asset_cfg": SceneEntityCfg("chicken"),
-        },
+        params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("chicken")},
     )
+
+
+# ---------------------------------------------------------------------------
+# Curriculum
+# ---------------------------------------------------------------------------
 
 
 @configclass
@@ -260,14 +361,13 @@ class CurriculumCfg:
 
 
 ##
-# Top-level env config
+# Top-level env configs
 ##
 
 
 @configclass
 class ChickenLiftEnvCfg(ManagerBasedRLEnvCfg):
-    """Abstract base – concrete subclass must set robot, ee_frame, chicken, arm_action,
-    gripper_action, and commands.object_pose.body_name."""
+    """Abstract base for original single-gripper chicken lift tasks."""
 
     scene: ChickenLiftSceneCfg = ChickenLiftSceneCfg(num_envs=4096, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()
@@ -281,6 +381,35 @@ class ChickenLiftEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         self.decimation = 2
         self.episode_length_s = 5.0
+        self.sim.dt = 0.01
+        self.sim.render_interval = self.decimation
+        self.sim.physx.bounce_threshold_velocity = 0.01
+        self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
+        self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
+        self.sim.physx.friction_correlation_distance = 0.00625
+
+
+@configclass
+class ChickenSequentialGraspEnvCfg(ManagerBasedRLEnvCfg):
+    """Abstract base for sequential two-jaw grasping tasks.
+
+    Subclass must set: scene.robot, scene.ee_frame, scene.chicken,
+    actions.arm_action, actions.gripper_left_action,
+    actions.gripper_right_action, commands.object_pose.body_name.
+    """
+
+    scene: ChickenLiftSceneCfg = ChickenLiftSceneCfg(num_envs=4096, env_spacing=2.5)
+    observations: ObservationsCfg = ObservationsCfg()
+    actions: SequentialActionsCfg = SequentialActionsCfg()
+    commands: CommandsCfg = CommandsCfg()
+    rewards: SequentialGraspRewardsCfg = SequentialGraspRewardsCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+    events: EventCfg = EventCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
+
+    def __post_init__(self):
+        self.decimation = 2
+        self.episode_length_s = 8.0   # longer than generic — more phases to complete
         self.sim.dt = 0.01
         self.sim.render_interval = self.decimation
         self.sim.physx.bounce_threshold_velocity = 0.01
