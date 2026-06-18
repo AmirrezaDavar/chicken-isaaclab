@@ -216,7 +216,7 @@ class RewardsCfg:
 
     lifting_object = RewTerm(
         func=lift_mdp.object_is_lifted,
-        params={"minimal_height": 0.06, "object_cfg": SceneEntityCfg("chicken")},
+        params={"minimal_height": 0.50, "object_cfg": SceneEntityCfg("chicken")},
         weight=15.0,
     )
 
@@ -224,7 +224,7 @@ class RewardsCfg:
         func=lift_mdp.object_goal_distance,
         params={
             "std": 0.3,
-            "minimal_height": 0.06,
+            "minimal_height": 0.50,
             "command_name": "object_pose",
             "object_cfg": SceneEntityCfg("chicken"),
         },
@@ -235,7 +235,7 @@ class RewardsCfg:
         func=lift_mdp.object_goal_distance,
         params={
             "std": 0.05,
-            "minimal_height": 0.06,
+            "minimal_height": 0.50,
             "command_name": "object_pose",
             "object_cfg": SceneEntityCfg("chicken"),
         },
@@ -299,7 +299,7 @@ class SequentialGraspRewardsCfg:
     # Phase 3: lift the chicken — only rewarded once the left jaw is active
     lifting_gated = RewTerm(
         func=chicken_mdp.chicken_lifted_gated,
-        params={"minimal_height": 0.06, "gate_threshold": 0.3},
+        params={"minimal_height": 0.50, "gate_threshold": 0.3},
         weight=20.0,
     )
 
@@ -308,7 +308,7 @@ class SequentialGraspRewardsCfg:
         func=chicken_mdp.chicken_goal_tracking_gated,
         params={
             "std": 0.3,
-            "minimal_height": 0.06,
+            "minimal_height": 0.50,
             "command_name": "object_pose",
             "gate_threshold": 0.3,
         },

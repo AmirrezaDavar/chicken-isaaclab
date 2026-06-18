@@ -94,7 +94,7 @@ except ImportError:
 TASK_ID     = "Isaac-Lift-Chicken-UR10e-CustomGripper-GELLO-v0"
 SIM_STEP_DT = 0.02     # decimation=2, dt=0.01
 GRIPPER_THRESH = 0.5   # GELLO gripper fraction below this → open command
-LIFT_HEIGHT_M  = 0.06  # chicken Z above robot base → "lifted" (stage=1)
+LIFT_HEIGHT_M  = 0.06  # chicken Z above robot base (Z=0.63) → "lifted" = world Z > ~0.69 m (stage=1)
 
 GELLO_SIGNS   = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
 GELLO_OFFSETS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)

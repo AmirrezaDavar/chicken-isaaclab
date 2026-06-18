@@ -36,7 +36,7 @@ class UR10eCustomGripperChickenLiftEnvCfg(ChickenLiftEnvCfg):
         self.scene.robot = UR10e_CUSTOM_GRIPPER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
             init_state=ArticulationCfg.InitialStateCfg(
-                pos=(0.0, 0.0, 0.0),
+                pos=(0.0, 0.0, 0.63),   # 0.63 m = UR10eRizer pedestal height
                 rot=(1.0, 0.0, 0.0, 0.0),
                 joint_pos={
                     "shoulder_pan_joint": 0.0,
