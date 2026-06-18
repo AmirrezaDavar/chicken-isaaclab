@@ -8,11 +8,14 @@
 **/*.dmp
 **/.thumbs
 
-# No USD files allowed in the repo
+# No USD files allowed in the repo (large meshes)
 **/*.usd
 **/*.usda
 **/*.usdc
 **/*.usdz
+# Exception: small raiser model needed for the robot scene
+!Universal_Robots_ROS2_Description/urdf/UR10eRizer.usd
+!Universal_Robots_ROS2_Description/urdf/robot_raiser.usda
 
 # Python
 .DS_Store
