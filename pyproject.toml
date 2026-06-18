@@ -15,6 +15,9 @@ dependencies = [
     "isaaclab_mimic[all]",
     "ruff>=0.15.7",
     "zarr>=2.12,<3",
+    "pyarrow>=14.0",
+    "pandas>=2.0",
+    "opencv-python>=4.8",
 ]
 
 [tool.uv]
