@@ -14,7 +14,7 @@ from isaaclab.assets import ArticulationCfg
 
 CHICKEN_CARCASS_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="my_assets/chicken_2/chicken_carcass_2/chicken.usd",
+        usd_path="my_assets/chicken/chicken/chicken.usd",
         scale=(0.25, 0.25, 0.25),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -34,7 +34,7 @@ CHICKEN_CARCASS_CFG = ArticulationCfg(
         activate_contact_sensors=False,
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.45, 0.0, 0.05),
+        pos=(-0.70, 0.20, 0.05),
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
             "left_hip": 0.0,
@@ -44,22 +44,20 @@ CHICKEN_CARCASS_CFG = ArticulationCfg(
         },
     ),
     actuators={
-        # Truly passive: no spring, minimal damping so legs droop/swing naturally
-        # under gravity and respond to contact like a real dead chicken carcass.
         "passive": ImplicitActuatorCfg(
             joint_names_expr=["left_hip", "right_hip", "left_shoulder", "right_shoulder"],
             stiffness=0.0,
-            damping=0.1,
+            damping=5.0,
             effort_limit_sim=0.0,
         ),
     },
 )
-"""Chicken carcass (chicken_2) — passive revolute joints, realistic mass/inertia."""
+"""Chicken carcass (original model) — passive revolute joints."""
 
 
 CHICKEN_BALANCE_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="my_assets/chicken_2/chicken_carcass_2/chicken.usd",
+        usd_path="my_assets/chicken/chicken/chicken.usd",
         scale=(0.25, 0.25, 0.25),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
