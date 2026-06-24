@@ -60,7 +60,10 @@ class ChickenLiftSceneCfg(InteractiveSceneCfg):
 
     plane = AssetBaseCfg(
         prim_path="/World/GroundPlane",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0, 0, -1.05]),
+        # Keep the physical floor at world z=0. The chicken drop termination
+        # also assumes this height, so moving the plane lower makes the object
+        # fall through the visible grid and reset repeatedly.
+        init_state=AssetBaseCfg.InitialStateCfg(pos=[0, 0, 0.0]),
         spawn=GroundPlaneCfg(),
     )
 
@@ -179,7 +182,9 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.1, 0.1), "y": (-0.2, 0.2), "z": (0.0, 0.0)},
+            # Spawn slightly above the floor so the articulated carcass is not
+            # initialized interpenetrating the ground plane.
+            "pose_range": {"x": (-0.1, 0.1), "y": (-0.2, 0.2), "z": (0.05, 0.05)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("chicken"),
         },

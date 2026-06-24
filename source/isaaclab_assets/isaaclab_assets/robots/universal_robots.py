@@ -11,8 +11,8 @@ The following configuration parameters are available:
 * :obj:`UR10_CFG`: The UR10 arm without a gripper.
 * :obj:`UR10E_ROBOTIQ_GRIPPER_CFG`: The UR10E arm with Robotiq_2f_140 gripper.
 * :obj:`UR10e_ROBOTIQ_2F_85_CFG`: The UR10E arm with Robotiq 2F-85 gripper.
-* :obj:`UR10e_CUSTOM_GRIPPER_CFG`: The UR10e arm with the custom 4-jaw parallel gripper from
-  Universal_Robots_ROS2_Description/urdf/1_fixed.usda.
+* :obj:`UR10e_CUSTOM_GRIPPER_CFG`: The UR10e arm with the custom 4-jaw parallel gripper.
+* :obj:`UR10E_RAISER_CFG`: The separate raiser stand used under the custom UR10e.
 
 Reference: https://github.com/ros-industrial/universal_robot
 """
@@ -21,10 +21,11 @@ import os
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.assets import AssetBaseCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 
-# Absolute path to the local USDA for UR10e + custom gripper.
+# Absolute paths to local USDA assets for UR10e + custom gripper.
 # universal_robots.py lives at source/isaaclab_assets/isaaclab_assets/robots/
 # so 5 dirname calls reach the repo root.
 _REPO_ROOT = os.path.dirname(
@@ -35,7 +36,10 @@ _REPO_ROOT = os.path.dirname(
     )
 )
 _UR10E_CUSTOM_GRIPPER_USD = os.path.join(
-    _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "1_fixed.usda"
+    _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "1_fixed_robot.usda"
+)
+_UR10E_RAISER_USD = os.path.join(
+    _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "robot_raiser.usda"
 )
 
 ##
@@ -223,6 +227,21 @@ UR10e_ROBOTIQ_2F_85_CFG.actuators["gripper_passive"] = ImplicitActuatorCfg(
 )
 
 """Configuration of UR-10E arm with Robotiq 2F-85 gripper."""
+
+
+UR10E_RAISER_CFG = AssetBaseCfg(
+    spawn=sim_utils.UsdFileCfg(usd_path=_UR10E_RAISER_USD),
+    init_state=AssetBaseCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.0),
+        rot=(1.0, 0.0, 0.0, 0.0),
+    ),
+)
+"""Raiser stand for the custom UR10e.
+
+The stand is spawned as a scene asset, not inside the robot articulation. This
+keeps Isaac Lab root resets from moving the robot independently of a stand that
+was authored inside the same USD scene.
+"""
 
 
 UR10e_CUSTOM_GRIPPER_CFG = ArticulationCfg(

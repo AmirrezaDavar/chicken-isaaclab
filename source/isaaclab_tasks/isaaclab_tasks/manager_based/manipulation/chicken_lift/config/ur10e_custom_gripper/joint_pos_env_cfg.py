@@ -17,7 +17,7 @@ from isaaclab.utils import configclass
 import isaaclab.envs.mdp as mdp
 from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import ChickenLiftEnvCfg
 
-from isaaclab_assets.robots.universal_robots import UR10e_CUSTOM_GRIPPER_CFG  # isort: skip
+from isaaclab_assets.robots.universal_robots import UR10E_RAISER_CFG, UR10e_CUSTOM_GRIPPER_CFG  # isort: skip
 from isaaclab_assets.robots.chicken import CHICKEN_CARCASS_CFG  # isort: skip
 
 # Gripper joint limits (meters): open = 0, closed = -0.0093
@@ -32,11 +32,20 @@ class UR10eCustomGripperChickenLiftEnvCfg(ChickenLiftEnvCfg):
     def __post_init__(self):
         super().__post_init__()
 
+        # ---- Raiser stand ------------------------------------------------
+        # Spawn the stand as its own scene asset. The robot USD is kept
+        # articulation-only, so Isaac Lab resets do not separate the stand
+        # from the robot base.
+        self.scene.robot_raiser = UR10E_RAISER_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/RobotRaiser",
+        )
+
         # ---- Robot -------------------------------------------------------
         self.scene.robot = UR10e_CUSTOM_GRIPPER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
             init_state=ArticulationCfg.InitialStateCfg(
-                pos=(0.0, 0.0, 0.63),   # 0.63 m = UR10eRizer pedestal height
+                # 0.63 m is the top of the UR10e raiser stand.
+                pos=(0.0, 0.0, 0.63),
                 rot=(1.0, 0.0, 0.0, 0.0),
                 joint_pos={
                     "shoulder_pan_joint": 0.0,

@@ -1,0 +1,43 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "World"
+{
+    def Xform "ur10e" (
+        prepend references = @./1_fixed.usda@</World/ur10e>
+    )
+    {
+        # Runtime robot asset: keep the articulation root at local z=0.
+        # Isaac Lab places it on the 0.63 m raiser through ArticulationCfg.init_state.
+        quatd xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+        over "joints"
+        {
+            over "ee_joint"
+            {
+                rel physics:body1 = </World/custom_gripper/custom_gripper/Base_Gripper>
+            }
+        }
+
+        over "root_joint"
+        {
+            point3f physics:localPos0 = (0, 0, 0)
+        }
+    }
+
+    def Xform "custom_gripper" (
+        prepend references = @./1_fixed.usda@</World/custom_gripper>
+    )
+    {
+        # Original scene z was 0.690470516... with the robot base authored at z=0.63.
+        # Subtract 0.63 so the gripper stays in the same pose relative to the robot.
+        double3 xformOp:translate = (1.1824207545344638, 0.2907, 0.06047051625436577)
+    }
+}

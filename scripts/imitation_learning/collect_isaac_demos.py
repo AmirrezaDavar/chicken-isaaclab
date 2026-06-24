@@ -62,6 +62,12 @@ parser.add_argument("--diagnose",      action="store_true",
                     help="Print GELLO vs sim joint table for calibration.")
 parser.add_argument("--video_fps",     type=int,  default=30,
                     help="FPS for saved MP4 videos (default 30).")
+parser.add_argument("--no_live_camera", action="store_true",
+                    help="Disable the OpenCV camera popup to reduce teleop lag.")
+parser.add_argument("--live_camera_recording_only", action="store_true",
+                    help="Show the OpenCV camera popup only while recording.")
+parser.add_argument("--preview_stride", type=int, default=1,
+                    help="Show one live preview frame every N sim steps.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -458,16 +464,21 @@ def main():
 
     # ── startup: snap robot to GELLO's current pose ───────────────────────────
     env.reset()
+    rb_pos_z = env_uw.scene["robot"].data.root_pos_w[0, 2].item()  # type: ignore[union-attr]
+    print(f"[DEBUG] Robot base Z after reset = {rb_pos_z:.4f}  (expected 0.63)")
     gello_start = snap_to_gello(env_uw, gello)
     for _ in range(10):
         env.step(torch.tensor(np.array([*gello_start, 1.0, 1.0], dtype=np.float32),
                               device=env_uw.device).unsqueeze(0))
+    rb_pos_z = env_uw.scene["robot"].data.root_pos_w[0, 2].item()  # type: ignore[union-attr]
+    print(f"[DEBUG] Robot base Z after snap  = {rb_pos_z:.4f}  (expected 0.63)")
     print("[GELLO] Ready. Press C to start recording.")
 
     # ── main loop ─────────────────────────────────────────────────────────────
     demos_saved  = writer.n_episodes
     rec_steps    = 0
     ep_timestamp = 0.0
+    loop_step    = 0
 
     while simulation_app.is_running() and not flags["quit"]:
         if args_cli.num_demos > 0 and demos_saved >= args_cli.num_demos:
@@ -481,14 +492,25 @@ def main():
         gripper_bin  = 1.0 if gripper_frac < GRIPPER_THRESH else -1.0
         action_np    = np.array([*arm_joints, gripper_bin, gripper_bin], dtype=np.float32)
 
-        # ── observe + camera (before step) ───────────────────────────────────
+        # ── observe + optional camera (before step) ──────────────────────────
         obs_dict  = extract_obs_dict(env_uw)
-        cam_frame = get_camera_frame(env_uw)
         reward, stage = compute_reward_stage(obs_dict)
 
-        # ── live camera popup ─────────────────────────────────────────────────
-        if _HAS_CV2:
+        preview_stride = max(args_cli.preview_stride, 1)
+        preview_allowed = (
+            _HAS_CV2
+            and not args_cli.no_live_camera
+            and (not args_cli.live_camera_recording_only or flags["recording"])
+        )
+        need_preview = preview_allowed and loop_step % preview_stride == 0
+        need_record_frame = flags["recording"]
+        cam_frame = get_camera_frame(env_uw) if (need_preview or need_record_frame) else None
+
+        # ── live camera popup ────────────────────────────────────────────────
+        if need_preview and cam_frame is not None:
             cv2.imshow("RealSense Camera", cv2.cvtColor(cam_frame, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(1)
+        elif preview_allowed:
             cv2.waitKey(1)
 
         # ── step sim ──────────────────────────────────────────────────────────
@@ -497,6 +519,8 @@ def main():
 
         # ── record ────────────────────────────────────────────────────────────
         if flags["recording"]:
+            if cam_frame is None:
+                cam_frame = get_camera_frame(env_uw)
             writer.add_step(obs_dict, action_np, cam_frame,
                             timestamp=ep_timestamp, stage=stage)
             rec_steps    += 1
@@ -538,6 +562,8 @@ def main():
                 rec_steps    = 0
                 ep_timestamp = 0.0
             _reset_env(env, env_uw, gello)
+
+        loop_step += 1
 
     # ── cleanup ───────────────────────────────────────────────────────────────
     kb.close()

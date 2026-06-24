@@ -28,7 +28,7 @@ from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg
     ChickenSequentialGraspEnvCfg,
 )
 
-from isaaclab_assets.robots.universal_robots import UR10e_CUSTOM_GRIPPER_CFG  # isort: skip
+from isaaclab_assets.robots.universal_robots import UR10E_RAISER_CFG, UR10e_CUSTOM_GRIPPER_CFG  # isort: skip
 from isaaclab_assets.robots.chicken import CHICKEN_CARCASS_CFG  # isort: skip
 
 # Prismatic joint travel: 0 = open, −9.3 mm = fully closed
@@ -43,11 +43,19 @@ class UR10eChickenLiftEnvCfg(ChickenSequentialGraspEnvCfg):
     def __post_init__(self):
         super().__post_init__()
 
+        # ---- Raiser stand ------------------------------------------------
+        # Keep the stand outside the articulation so robot root resets only
+        # affect the robot, not the support geometry.
+        self.scene.robot_raiser = UR10E_RAISER_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/RobotRaiser",
+        )
+
         # ---- Robot -------------------------------------------------------
         self.scene.robot = UR10e_CUSTOM_GRIPPER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
             init_state=ArticulationCfg.InitialStateCfg(
-                pos=(0.0, 0.0, 0.0),
+                # 0.63 m is the top of the UR10e raiser stand.
+                pos=(0.0, 0.0, 0.63),
                 rot=(1.0, 0.0, 0.0, 0.0),
                 joint_pos={
                     "shoulder_pan_joint": 0.0,

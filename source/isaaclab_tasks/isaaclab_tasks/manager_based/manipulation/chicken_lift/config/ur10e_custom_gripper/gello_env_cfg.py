@@ -44,10 +44,12 @@ class UR10eCustomGripperChickenLiftGelloEnvCfg(joint_pos_env_cfg.UR10eCustomGrip
 
         # Set robot reset position to match GELLO's natural home pose so that
         # env.reset() starts close to where the arm will be snapped to.
+        # The robot asset is normalized to z=0; z=0.63 places the base on top
+        # of the separately spawned raiser stand.
         # Values from diagnostic (Δ≈0 screenshots): pan=-11.7°, lift=-106.1°,
         # elbow=-90.6°, wrist1=-81.2° (=278.8°-360°), wrist2=+92.4°, wrist3=+11.5°.
         self.scene.robot.init_state = ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.63),   # 0.63 m = UR10eRizer pedestal height
+            pos=(0.0, 0.0, 0.63),
             rot=(1.0, 0.0, 0.0, 0.0),
             joint_pos={
                 "shoulder_pan_joint":  -0.205,
