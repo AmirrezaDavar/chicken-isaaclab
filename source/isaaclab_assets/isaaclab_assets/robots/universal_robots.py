@@ -13,6 +13,8 @@ The following configuration parameters are available:
 * :obj:`UR10e_ROBOTIQ_2F_85_CFG`: The UR10E arm with Robotiq 2F-85 gripper.
 * :obj:`UR10e_CUSTOM_GRIPPER_CFG`: The UR10e arm with the custom 4-jaw parallel gripper.
 * :obj:`UR10E_RAISER_CFG`: The separate raiser stand used under the custom UR10e.
+* :obj:`UR10E_TABLE_CFG`: The table placed in front of the custom UR10e.
+* :obj:`UR10E_SHACKLE_CFG`: The shackle placed above the far end of the table.
 
 Reference: https://github.com/ros-industrial/universal_robot
 """
@@ -41,6 +43,19 @@ _UR10E_CUSTOM_GRIPPER_USD = os.path.join(
 _UR10E_RAISER_USD = os.path.join(
     _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "robot_raiser.usda"
 )
+_UR10E_TABLE_USD = os.path.join(
+    _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "simpleTable.usda"
+)
+_UR10E_SHACKLE_USD = os.path.join(
+    _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "Shackle_SIM_Working.usd"
+)
+
+_TABLE_CENTER_X = -0.60
+_TABLE_CENTER_Y = 0.0
+_TABLE_TOP_Z = 0.6205
+_TABLE_HALF_LENGTH_X = 0.4
+_SHACKLE_LOCAL_BOTTOM_Z = -0.0385
+_SHACKLE_BOTTOM_ABOVE_TABLE = 1.0
 
 ##
 # Configuration
@@ -242,6 +257,45 @@ The stand is spawned as a scene asset, not inside the robot articulation. This
 keeps Isaac Lab root resets from moving the robot independently of a stand that
 was authored inside the same USD scene.
 """
+
+
+UR10E_TABLE_CFG = AssetBaseCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=_UR10E_TABLE_USD,
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            contact_offset=0.02,
+            rest_offset=0.0,
+        ),
+    ),
+    init_state=AssetBaseCfg.InitialStateCfg(
+        # The CAD origin is the tabletop. The model extends 0.6205 m downward,
+        # so this z position puts the legs on the ground plane.
+        pos=(_TABLE_CENTER_X, _TABLE_CENTER_Y, _TABLE_TOP_Z),
+        rot=(1.0, 0.0, 0.0, 0.0),
+    ),
+)
+"""Kinematic table placed in front of the custom UR10e."""
+
+
+UR10E_SHACKLE_CFG = AssetBaseCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=_UR10E_SHACKLE_USD,
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            contact_offset=0.02,
+            rest_offset=0.0,
+        ),
+    ),
+    init_state=AssetBaseCfg.InitialStateCfg(
+        # Far end of the table, with the shackle bottom 1 m above the tabletop.
+        pos=(
+            _TABLE_CENTER_X - _TABLE_HALF_LENGTH_X,
+            _TABLE_CENTER_Y,
+            _TABLE_TOP_Z + _SHACKLE_BOTTOM_ABOVE_TABLE - _SHACKLE_LOCAL_BOTTOM_Z,
+        ),
+        rot=(1.0, 0.0, 0.0, 0.0),
+    ),
+)
+"""Kinematic shackle placed above the far end of the table."""
 
 
 UR10e_CUSTOM_GRIPPER_CFG = ArticulationCfg(

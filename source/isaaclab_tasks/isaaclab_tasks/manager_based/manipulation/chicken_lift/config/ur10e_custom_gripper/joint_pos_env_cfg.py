@@ -15,9 +15,17 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils import configclass
 
 import isaaclab.envs.mdp as mdp
-from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import ChickenLiftEnvCfg
+from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import (
+    ChickenLiftEnvCfg,
+    make_chicken_table_init_state,
+)
 
-from isaaclab_assets.robots.universal_robots import UR10E_RAISER_CFG, UR10e_CUSTOM_GRIPPER_CFG  # isort: skip
+from isaaclab_assets.robots.universal_robots import (  # isort: skip
+    UR10E_RAISER_CFG,
+    UR10E_SHACKLE_CFG,
+    UR10E_TABLE_CFG,
+    UR10e_CUSTOM_GRIPPER_CFG,
+)
 from isaaclab_assets.robots.chicken import CHICKEN_CARCASS_CFG  # isort: skip
 
 # Gripper joint limits (meters): open = 0, closed = -0.0093
@@ -38,6 +46,20 @@ class UR10eCustomGripperChickenLiftEnvCfg(ChickenLiftEnvCfg):
         # from the robot base.
         self.scene.robot_raiser = UR10E_RAISER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/RobotRaiser",
+        )
+
+        # ---- Table -------------------------------------------------------
+        # The table is a kinematic scene asset. It is placed in front of the
+        # robot, with its top at z=0.6205 m.
+        self.scene.table = UR10E_TABLE_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/Table",
+        )
+
+        # ---- Shackle -----------------------------------------------------
+        # The shackle is a kinematic scene asset, placed 1 m above the far end
+        # of the table.
+        self.scene.shackle = UR10E_SHACKLE_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/Shackle",
         )
 
         # ---- Robot -------------------------------------------------------
@@ -75,7 +97,8 @@ class UR10eCustomGripperChickenLiftEnvCfg(ChickenLiftEnvCfg):
 
         # ---- Chicken object -----------------------------------------------
         self.scene.chicken = CHICKEN_CARCASS_CFG.replace(
-            prim_path="{ENV_REGEX_NS}/Chicken"
+            prim_path="{ENV_REGEX_NS}/Chicken",
+            init_state=make_chicken_table_init_state(),
         )
 
         # ---- End-effector frame at gripper fingertip ----------------------

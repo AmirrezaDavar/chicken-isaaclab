@@ -2,10 +2,11 @@
 
 """ArticulationCfg for the chicken carcass pick-and-place object.
 
-The chicken is treated as a passive articulation: its leg and wing joints are
-free-floating (zero stiffness, light damping) so they respond naturally to
-contact forces during grasping.  Joint poses are randomised at each episode
-reset via the environment event system.
+The chicken is treated as a compliant passive articulation: its leg and wing
+joints have just enough spring/damping to keep thin limbs from sagging through
+the table, while still responding naturally to contact forces during grasping.
+Joint poses are randomised at each episode reset via the environment event
+system.
 """
 
 import isaaclab.sim as sim_utils
@@ -14,7 +15,7 @@ from isaaclab.assets import ArticulationCfg
 
 CHICKEN_CARCASS_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="my_assets/chicken/chicken/chicken.usd",
+        usd_path="my_assets/chicken/chicken/chicken_with_collisions.usda",
         scale=(0.25, 0.25, 0.25),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -28,8 +29,8 @@ CHICKEN_CARCASS_CFG = ArticulationCfg(
             solver_velocity_iteration_count=1,
         ),
         collision_props=sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.005,
-            rest_offset=0.001,
+            contact_offset=0.02,
+            rest_offset=0.0,
         ),
         activate_contact_sensors=False,
     ),
@@ -44,20 +45,26 @@ CHICKEN_CARCASS_CFG = ArticulationCfg(
         },
     ),
     actuators={
-        "passive": ImplicitActuatorCfg(
-            joint_names_expr=["left_hip", "right_hip", "left_shoulder", "right_shoulder"],
-            stiffness=0.0,
+        "legs": ImplicitActuatorCfg(
+            joint_names_expr=["left_hip", "right_hip"],
+            stiffness=2.0,
+            damping=8.0,
+            effort_limit_sim=1.5,
+        ),
+        "wings": ImplicitActuatorCfg(
+            joint_names_expr=["left_shoulder", "right_shoulder"],
+            stiffness=0.5,
             damping=5.0,
-            effort_limit_sim=0.0,
+            effort_limit_sim=0.5,
         ),
     },
 )
-"""Chicken carcass (original model) — passive revolute joints."""
+"""Chicken carcass (original model) with compliant passive revolute joints."""
 
 
 CHICKEN_BALANCE_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path="my_assets/chicken/chicken/chicken.usd",
+        usd_path="my_assets/chicken/chicken/chicken_with_collisions.usda",
         scale=(0.25, 0.25, 0.25),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,

@@ -26,9 +26,15 @@ from isaaclab.utils import configclass
 import isaaclab.envs.mdp as mdp
 from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import (
     ChickenSequentialGraspEnvCfg,
+    make_chicken_table_init_state,
 )
 
-from isaaclab_assets.robots.universal_robots import UR10E_RAISER_CFG, UR10e_CUSTOM_GRIPPER_CFG  # isort: skip
+from isaaclab_assets.robots.universal_robots import (  # isort: skip
+    UR10E_RAISER_CFG,
+    UR10E_SHACKLE_CFG,
+    UR10E_TABLE_CFG,
+    UR10e_CUSTOM_GRIPPER_CFG,
+)
 from isaaclab_assets.robots.chicken import CHICKEN_CARCASS_CFG  # isort: skip
 
 # Prismatic joint travel: 0 = open, −9.3 mm = fully closed
@@ -48,6 +54,20 @@ class UR10eChickenLiftEnvCfg(ChickenSequentialGraspEnvCfg):
         # affect the robot, not the support geometry.
         self.scene.robot_raiser = UR10E_RAISER_CFG.replace(
             prim_path="{ENV_REGEX_NS}/RobotRaiser",
+        )
+
+        # ---- Table -------------------------------------------------------
+        # The table is a kinematic scene asset. It is placed in front of the
+        # robot, with its top at z=0.6205 m.
+        self.scene.table = UR10E_TABLE_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/Table",
+        )
+
+        # ---- Shackle -----------------------------------------------------
+        # The shackle is a kinematic scene asset, placed 1 m above the far end
+        # of the table.
+        self.scene.shackle = UR10E_SHACKLE_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/Shackle",
         )
 
         # ---- Robot -------------------------------------------------------
@@ -85,7 +105,8 @@ class UR10eChickenLiftEnvCfg(ChickenSequentialGraspEnvCfg):
 
         # ---- Chicken object -----------------------------------------------
         self.scene.chicken = CHICKEN_CARCASS_CFG.replace(
-            prim_path="{ENV_REGEX_NS}/Chicken"
+            prim_path="{ENV_REGEX_NS}/Chicken",
+            init_state=make_chicken_table_init_state(),
         )
 
         # ---- End-effector frame (centre of gripper palm) -----------------

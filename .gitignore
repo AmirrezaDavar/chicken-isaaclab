@@ -16,6 +16,12 @@
 # Exception: small raiser model needed for the robot scene
 !Universal_Robots_ROS2_Description/urdf/UR10eRizer.usd
 !Universal_Robots_ROS2_Description/urdf/robot_raiser.usda
+# Exception: table model used by the chicken-lift scene
+!Universal_Robots_ROS2_Description/urdf/simpleTable.usda
+# Exception: shackle model used by the chicken-lift scene
+!Universal_Robots_ROS2_Description/urdf/Shackle_SIM_Working.usd
+# Exception: lightweight chicken collision wrapper used by the chicken-lift scene
+!my_assets/chicken/chicken/chicken_with_collisions.usda
 
 # Python
 .DS_Store

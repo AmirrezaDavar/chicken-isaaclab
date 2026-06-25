@@ -1,0 +1,81 @@
+#usda 1.0
+(
+    defaultPrim = "chicken_carcass"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "chicken_carcass" (
+    prepend references = @./chicken.usd@
+)
+{
+    over "torso"
+    {
+        def Cube "table_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1
+            token visibility = "invisible"
+            float3 xformOp:scale = (0.445, 0.879, 0.5)
+            double3 xformOp:translate = (-0.0065, 0.0705, -0.004)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    over "left_leg"
+    {
+        def Cube "table_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1
+            token visibility = "invisible"
+            float3 xformOp:scale = (0.164, 0.489, 0.262)
+            double3 xformOp:translate = (0.145, -0.3205, -0.0025)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    over "right_leg"
+    {
+        def Cube "table_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1
+            token visibility = "invisible"
+            float3 xformOp:scale = (0.172, 0.449, 0.258)
+            double3 xformOp:translate = (-0.1215, -0.324, 0.038)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    over "left_wing"
+    {
+        def Cube "table_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1
+            token visibility = "invisible"
+            float3 xformOp:scale = (0.365, 0.268, 0.246)
+            double3 xformOp:translate = (0.2475, 0.227, -0.008)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    over "right_wing"
+    {
+        def Cube "table_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1
+            token visibility = "invisible"
+            float3 xformOp:scale = (0.308, 0.265, 0.245)
+            double3 xformOp:translate = (-0.2885, 0.182, 0.0065)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+}

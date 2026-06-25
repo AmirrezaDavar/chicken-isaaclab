@@ -5,6 +5,8 @@
 Scene layout
 ------------
 * robot   – UR10e with gripper (set by concrete subclass)
+* table   – kinematic table in front of the robot
+* shackle – kinematic shackle above the far end of the table
 * ee_frame – FrameTransformer tracking the gripper tip (set by subclass)
 * chicken  – passive articulation; legs/wings randomised at every reset
 * plane   – infinite ground plane
@@ -47,6 +49,32 @@ import isaaclab.envs.mdp as mdp
 ##
 # Scene
 ##
+
+TABLE_CENTER_X = -0.60
+TABLE_CENTER_Y = 0.0
+TABLE_TOP_Z = 0.6205
+# Measured from the wrapped chicken asset after the 0.25 spawn scale.
+CHICKEN_ROOT_TO_LOWEST_VISUAL_Z = 0.12635
+CHICKEN_TABLE_CLEARANCE_Z = 0.005
+CHICKEN_ROOT_ABOVE_TABLE_Z = CHICKEN_ROOT_TO_LOWEST_VISUAL_Z + CHICKEN_TABLE_CLEARANCE_Z
+CHICKEN_SPAWN_Z = TABLE_TOP_Z + CHICKEN_ROOT_ABOVE_TABLE_Z
+CHICKEN_LIFT_MIN_HEIGHT = CHICKEN_SPAWN_Z + 0.08
+CHICKEN_DROP_MIN_HEIGHT = TABLE_TOP_Z - 0.08
+
+
+def make_chicken_table_init_state() -> ArticulationCfg.InitialStateCfg:
+    """Default chicken pose centered on the table used by the UR10e scenes."""
+
+    return ArticulationCfg.InitialStateCfg(
+        pos=(TABLE_CENTER_X, TABLE_CENTER_Y, CHICKEN_SPAWN_Z),
+        rot=(0.707, 0.0, 0.0, 0.707),
+        joint_pos={
+            "left_hip": 0.0,
+            "right_hip": 0.0,
+            "left_shoulder": 0.0,
+            "right_shoulder": 0.0,
+        },
+    )
 
 
 @configclass
@@ -182,9 +210,9 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            # Spawn slightly above the floor so the articulated carcass is not
-            # initialized interpenetrating the ground plane.
-            "pose_range": {"x": (-0.1, 0.1), "y": (-0.2, 0.2), "z": (0.05, 0.05)},
+            # These offsets are added to the chicken's default root pose, which
+            # the UR10e configs place slightly above the tabletop.
+            "pose_range": {"x": (-0.08, 0.08), "y": (-0.12, 0.12), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("chicken"),
         },
@@ -194,7 +222,7 @@ class EventCfg:
         func=mdp.reset_joints_by_offset,
         mode="reset",
         params={
-            "position_range": (-1.0, 1.0),
+            "position_range": (-0.25, 0.25),
             "velocity_range": (0.0, 0.0),
             "asset_cfg": SceneEntityCfg(
                 "chicken",
@@ -221,7 +249,7 @@ class RewardsCfg:
 
     lifting_object = RewTerm(
         func=lift_mdp.object_is_lifted,
-        params={"minimal_height": 0.50, "object_cfg": SceneEntityCfg("chicken")},
+        params={"minimal_height": CHICKEN_LIFT_MIN_HEIGHT, "object_cfg": SceneEntityCfg("chicken")},
         weight=15.0,
     )
 
@@ -229,7 +257,7 @@ class RewardsCfg:
         func=lift_mdp.object_goal_distance,
         params={
             "std": 0.3,
-            "minimal_height": 0.50,
+            "minimal_height": CHICKEN_LIFT_MIN_HEIGHT,
             "command_name": "object_pose",
             "object_cfg": SceneEntityCfg("chicken"),
         },
@@ -240,7 +268,7 @@ class RewardsCfg:
         func=lift_mdp.object_goal_distance,
         params={
             "std": 0.05,
-            "minimal_height": 0.50,
+            "minimal_height": CHICKEN_LIFT_MIN_HEIGHT,
             "command_name": "object_pose",
             "object_cfg": SceneEntityCfg("chicken"),
         },
@@ -304,7 +332,7 @@ class SequentialGraspRewardsCfg:
     # Phase 3: lift the chicken — only rewarded once the left jaw is active
     lifting_gated = RewTerm(
         func=chicken_mdp.chicken_lifted_gated,
-        params={"minimal_height": 0.50, "gate_threshold": 0.3},
+        params={"minimal_height": CHICKEN_LIFT_MIN_HEIGHT, "gate_threshold": 0.3},
         weight=20.0,
     )
 
@@ -313,7 +341,7 @@ class SequentialGraspRewardsCfg:
         func=chicken_mdp.chicken_goal_tracking_gated,
         params={
             "std": 0.3,
-            "minimal_height": 0.50,
+            "minimal_height": CHICKEN_LIFT_MIN_HEIGHT,
             "command_name": "object_pose",
             "gate_threshold": 0.3,
         },
@@ -342,7 +370,7 @@ class TerminationsCfg:
 
     object_dropping = DoneTerm(
         func=mdp.root_height_below_minimum,
-        params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("chicken")},
+        params={"minimum_height": CHICKEN_DROP_MIN_HEIGHT, "asset_cfg": SceneEntityCfg("chicken")},
     )
 
 
