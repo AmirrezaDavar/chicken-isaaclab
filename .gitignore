@@ -22,6 +22,16 @@
 !Universal_Robots_ROS2_Description/urdf/Shackle_SIM_Working.usd
 # Exception: lightweight chicken collision wrapper used by the chicken-lift scene
 !my_assets/chicken/chicken/chicken_with_collisions.usda
+# Exceptions: current chicken imitation-learning asset bundle
+!my_assets/chicken_3/chicken_practical_real_physics_skinned.usda
+!my_assets/chicken_3/chicken_template_no_se3.usdc
+!my_assets/chicken_3/chicken_skinned_compound_colliders.usda
+!my_assets/chicken_3/model 1/
+!my_assets/chicken_3/model 1/model 1/
+!my_assets/chicken_3/model 1/model 1/ojb/
+!my_assets/chicken_3/model 1/model 1/ojb/20251211235408.jpg
+# Exception: current shackle used by the UR10e chicken-lift scene
+!Universal_Robots_ROS2_Description/urdf/20mm_shackle.usd
 
 # Python
 .DS_Store
@@ -54,6 +64,14 @@ docker/.container.cfg
 **/.neptune/*
 docker/artifacts/
 *.tmp
+*.ckpt
+*.pt
+*.pth
+*.zarr
+*.zarr/
+*.zip
+/data/
+/data*/
 
 # Local work files
 /local_files/

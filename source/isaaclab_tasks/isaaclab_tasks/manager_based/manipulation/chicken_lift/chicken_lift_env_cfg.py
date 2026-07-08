@@ -8,7 +8,7 @@ Scene layout
 * table   – kinematic table in front of the robot
 * shackle – kinematic shackle above the far end of the table
 * ee_frame – FrameTransformer tracking the gripper tip (set by subclass)
-* chicken  – passive articulation; legs/wings randomised at every reset
+* chicken  – passive skinned articulation with physical legs
 * plane   – infinite ground plane
 * light   – dome light
 
@@ -53,8 +53,8 @@ import isaaclab.envs.mdp as mdp
 TABLE_CENTER_X = -0.60
 TABLE_CENTER_Y = 0.0
 TABLE_TOP_Z = 0.6205
-# Measured from the wrapped chicken asset after the 0.25 spawn scale.
-CHICKEN_ROOT_TO_LOWEST_VISUAL_Z = 0.12635
+# Measured from the uploaded physics-aware USD at scale 0.44.
+CHICKEN_ROOT_TO_LOWEST_VISUAL_Z = 0.126
 CHICKEN_TABLE_CLEARANCE_Z = 0.005
 CHICKEN_ROOT_ABOVE_TABLE_Z = CHICKEN_ROOT_TO_LOWEST_VISUAL_Z + CHICKEN_TABLE_CLEARANCE_Z
 CHICKEN_SPAWN_Z = TABLE_TOP_Z + CHICKEN_ROOT_ABOVE_TABLE_Z
@@ -62,18 +62,12 @@ CHICKEN_LIFT_MIN_HEIGHT = CHICKEN_SPAWN_Z + 0.08
 CHICKEN_DROP_MIN_HEIGHT = TABLE_TOP_Z - 0.08
 
 
-def make_chicken_table_init_state() -> ArticulationCfg.InitialStateCfg:
+def make_chicken_table_init_state() -> AssetBaseCfg.InitialStateCfg:
     """Default chicken pose centered on the table used by the UR10e scenes."""
 
-    return ArticulationCfg.InitialStateCfg(
+    return AssetBaseCfg.InitialStateCfg(
         pos=(TABLE_CENTER_X, TABLE_CENTER_Y, CHICKEN_SPAWN_Z),
-        rot=(0.707, 0.0, 0.0, 0.707),
-        joint_pos={
-            "left_hip": 0.0,
-            "right_hip": 0.0,
-            "left_shoulder": 0.0,
-            "right_shoulder": 0.0,
-        },
+        rot=(0.0, 0.7071068, 0.7071068, 0.0),
     )
 
 
@@ -84,7 +78,7 @@ class ChickenLiftSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = MISSING
     ee_frame: FrameTransformerCfg = MISSING
 
-    chicken: ArticulationCfg = MISSING
+    chicken: AssetBaseCfg = MISSING
 
     plane = AssetBaseCfg(
         prim_path="/World/GroundPlane",
@@ -218,18 +212,13 @@ class EventCfg:
         },
     )
 
-    randomise_chicken_joints = EventTerm(
-        func=mdp.reset_joints_by_offset,
-        mode="reset",
-        params={
-            "position_range": (-0.25, 0.25),
-            "velocity_range": (0.0, 0.0),
-            "asset_cfg": SceneEntityCfg(
-                "chicken",
-                joint_names=["left_hip", "right_hip", "left_shoulder", "right_shoulder"],
-            ),
-        },
-    )
+    # The replacement chicken visual is a standalone USD, not the old skinned
+    # skeleton layout, so the old bone-copy driver is not used.
+    start_chicken_skin_driver = None
+
+    # The carcass joints are passive physical joints.  Do not randomize them
+    # with Isaac Lab joint targets; let gravity/contact settle the legs.
+    randomise_chicken_joints = None
 
 
 # ---------------------------------------------------------------------------
@@ -422,8 +411,10 @@ class ChickenLiftEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.01
         self.sim.render_interval = self.decimation
         self.sim.physx.bounce_threshold_velocity = 0.01
+        self.sim.physx.solve_articulation_contact_last = True
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
+        self.sim.physx.gpu_max_rigid_contact_count = 2**24
         self.sim.physx.friction_correlation_distance = 0.00625
 
 
@@ -451,6 +442,8 @@ class ChickenSequentialGraspEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.01
         self.sim.render_interval = self.decimation
         self.sim.physx.bounce_threshold_velocity = 0.01
+        self.sim.physx.solve_articulation_contact_last = True
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
+        self.sim.physx.gpu_max_rigid_contact_count = 2**24
         self.sim.physx.friction_correlation_distance = 0.00625

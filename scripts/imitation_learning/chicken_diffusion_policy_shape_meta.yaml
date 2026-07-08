@@ -1,0 +1,25 @@
+# Shape metadata for ChicGrasp / diffusion-policy training on chicken lift demos.
+# Point the training config dataset path at:
+#   <collection_out_dir>/replay_buffer.zarr
+#
+# The collector writes raw HWC uint8 images. Diffusion-policy configs normally
+# declare RGB observations as CHW in shape_meta, so camera_rgb is [3, H, W].
+
+shape_meta:
+  obs:
+    camera_rgb:
+      shape: [3, 480, 640]
+      type: rgb
+    state:
+      shape: [20]
+      type: low_dim
+  action:
+    shape: [8]
+
+dataset:
+  zarr_path: ./data/replay_buffer.zarr
+  horizon: 16
+  pad_before: 1
+  pad_after: 7
+  seed: 42
+  val_ratio: 0.02

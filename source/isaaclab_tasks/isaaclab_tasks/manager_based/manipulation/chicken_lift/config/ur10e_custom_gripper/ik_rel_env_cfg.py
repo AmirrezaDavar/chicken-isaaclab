@@ -31,7 +31,8 @@ class UR10eCustomGripperChickenLiftIKRelEnvCfg(joint_pos_env_cfg.UR10eCustomGrip
 
         # ── Arm: 6D relative EEF pose (IK) ──────────────────────────────────
         # DLS IK maps [dx,dy,dz,rx,ry,rz] delta to joint velocities.
-        # scale=0.5: smooth teleoperation; body_offset=18cm = gripper centre.
+        # Keep Cartesian steps small so contact has time to resolve instead of
+        # driving the target deep through the chicken in one env step.
         arm_ik = DifferentialInverseKinematicsActionCfg(
             asset_name="robot",
             joint_names=[
@@ -48,7 +49,7 @@ class UR10eCustomGripperChickenLiftIKRelEnvCfg(joint_pos_env_cfg.UR10eCustomGrip
                 use_relative_mode=True,
                 ik_method="dls",
             ),
-            scale=0.5,
+            scale=0.2,
             body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.18]),
         )
 

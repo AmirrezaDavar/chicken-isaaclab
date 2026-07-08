@@ -27,7 +27,7 @@ _GRIPPER_OPEN  =  0.0
 _GRIPPER_CLOSE = -0.0093   # physical hard-stop (meters)
 # Command target pushed 5 mm past the hard-stop so the spring is compressed even
 # when the chicken leg blocks the jaw before it reaches the real limit.
-_GRIPPER_CLOSE_CMD = -0.015
+_GRIPPER_CLOSE_CMD = -0.0093
 
 
 @configclass
@@ -41,6 +41,25 @@ class UR10eCustomGripperChickenLiftGelloEnvCfg(joint_pos_env_cfg.UR10eCustomGrip
 
     def __post_init__(self):
         super().__post_init__()
+
+        # GELLO teleop uses the final chicken USD as a scene asset only.  Do
+        # not run old RL terms that expect the previous articulated chicken.
+        self.observations.policy.object_position = None
+        self.observations.policy.chicken_legs = None
+        self.observations.policy.chicken_orient = None
+        self.observations.policy.chicken_vel = None
+        self.observations.policy.target_object_position = None
+        for name in self.rewards.__dataclass_fields__:
+            setattr(self.rewards, name, None)
+        for name in self.terminations.__dataclass_fields__:
+            if name != "time_out":
+                setattr(self.terminations, name, None)
+        for name in self.curriculum.__dataclass_fields__:
+            setattr(self.curriculum, name, None)
+        self.commands.object_pose = None
+        self.events.reset_chicken_position = None
+        self.events.randomise_chicken_joints = None
+        self.events.start_chicken_skin_driver = None
 
         # Set robot reset position to match GELLO's natural home pose so that
         # env.reset() starts close to where the arm will be snapped to.
@@ -65,15 +84,14 @@ class UR10eCustomGripperChickenLiftGelloEnvCfg(joint_pos_env_cfg.UR10eCustomGrip
             },
         )
 
-        # Stronger gripper actuator for firm grasping.
-        # stiffness 20000 N/m  →  ~66 N at 3.3 mm partial block (was ~8 N at 2500 N/m).
-        # effort_limit 200 N   →  removes the 35 N cap that was letting the leg slip.
+        # Contact-safe gripper actuator. Do not command hundreds of Newtons
+        # into the carcass; let collision block the jaw and report contact.
         self.scene.robot.actuators["gripper"] = ImplicitActuatorCfg(
             joint_names_expr=["PrismaticJoint.*"],
-            effort_limit_sim=200.0,
-            velocity_limit_sim=0.2,
-            stiffness=20000.0,
-            damping=500.0,
+            effort_limit_sim=30.0,
+            velocity_limit_sim=0.08,
+            stiffness=3000.0,
+            damping=220.0,
             friction=0.0,
             armature=0.0,
         )

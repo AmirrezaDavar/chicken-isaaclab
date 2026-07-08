@@ -12,3 +12,5 @@ from .sequential_grasp_rewards import (  # noqa: F401
     left_leg_grasped_reward,
     right_jaw_gated_reward,
 )
+
+from .skin_driver import start_chicken_skin_driver  # noqa: F401

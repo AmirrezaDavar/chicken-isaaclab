@@ -10,5 +10,5 @@
 *.pt filter=lfs diff=lfs merge=lfs -text
 *.jit filter=lfs diff=lfs merge=lfs -text
 *.hdf5 filter=lfs diff=lfs merge=lfs -text
-
 *.bat text eol=crlf
+my_assets/chicken_3/chicken_template_no_se3.usdc filter=lfs diff=lfs merge=lfs -text

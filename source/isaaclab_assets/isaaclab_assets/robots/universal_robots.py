@@ -47,7 +47,10 @@ _UR10E_TABLE_USD = os.path.join(
     _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "simpleTable.usda"
 )
 _UR10E_SHACKLE_USD = os.path.join(
-    _REPO_ROOT, "Universal_Robots_ROS2_Description", "urdf", "Shackle_SIM_Working.usd"
+    _REPO_ROOT,
+    "Universal_Robots_ROS2_Description",
+    "urdf",
+    "20mm_shackle.usd",
 )
 
 _TABLE_CENTER_X = -0.60
@@ -55,7 +58,7 @@ _TABLE_CENTER_Y = 0.0
 _TABLE_TOP_Z = 0.6205
 _TABLE_HALF_LENGTH_X = 0.4
 _SHACKLE_LOCAL_BOTTOM_Z = -0.0385
-_SHACKLE_BOTTOM_ABOVE_TABLE = 1.0
+_SHACKLE_BOTTOM_ABOVE_TABLE = 0.5
 
 ##
 # Configuration
@@ -280,6 +283,12 @@ UR10E_TABLE_CFG = AssetBaseCfg(
 UR10E_SHACKLE_CFG = AssetBaseCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=_UR10E_SHACKLE_USD,
+        scale=(0.001, 0.001, 0.001),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            kinematic_enabled=True,
+            disable_gravity=True,
+            max_depenetration_velocity=5.0,
+        ),
         collision_props=sim_utils.CollisionPropertiesCfg(
             contact_offset=0.02,
             rest_offset=0.0,
@@ -292,7 +301,7 @@ UR10E_SHACKLE_CFG = AssetBaseCfg(
             _TABLE_CENTER_Y,
             _TABLE_TOP_Z + _SHACKLE_BOTTOM_ABOVE_TABLE - _SHACKLE_LOCAL_BOTTOM_Z,
         ),
-        rot=(1.0, 0.0, 0.0, 0.0),
+        rot=(0.0, 0.0, 0.0, 1.0),
     ),
 )
 """Kinematic shackle placed above the far end of the table."""
@@ -321,7 +330,7 @@ UR10e_CUSTOM_GRIPPER_CFG = ArticulationCfg(
         collision_props=sim_utils.CollisionPropertiesCfg(
             contact_offset=0.005, rest_offset=0.0
         ),
-        activate_contact_sensors=False,
+        activate_contact_sensors=True,
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.0),
@@ -343,22 +352,28 @@ UR10e_CUSTOM_GRIPPER_CFG = ArticulationCfg(
     actuators={
         "shoulder": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_.*"],
-            stiffness=1320.0,
-            damping=72.66,
+            effort_limit_sim=120.0,
+            velocity_limit_sim=0.8,
+            stiffness=450.0,
+            damping=55.0,
             friction=0.0,
             armature=0.0,
         ),
         "elbow": ImplicitActuatorCfg(
             joint_names_expr=["elbow_joint"],
-            stiffness=600.0,
-            damping=34.64,
+            effort_limit_sim=90.0,
+            velocity_limit_sim=0.8,
+            stiffness=300.0,
+            damping=38.0,
             friction=0.0,
             armature=0.0,
         ),
         "wrist": ImplicitActuatorCfg(
             joint_names_expr=["wrist_.*"],
-            stiffness=216.0,
-            damping=29.39,
+            effort_limit_sim=35.0,
+            velocity_limit_sim=1.0,
+            stiffness=100.0,
+            damping=22.0,
             friction=0.0,
             armature=0.0,
         ),

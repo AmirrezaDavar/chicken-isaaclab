@@ -8,6 +8,8 @@ Saves episodes in diffusion-policy zarr format:
     replay_buffer.zarr/
       data/
         action/             (T_total, 8)  [arm_joints(6), left_jaw_bin(1), right_jaw_bin(1)]
+        camera_rgb/         (T_total, H, W, 3) uint8 wrist-camera RGB frames
+        state/              (T_total, 20) low-dim DP state vector
         left_jaw/           (T_total, 1)  left-jaw closure fraction [0=open, 1=closed]
         right_jaw/          (T_total, 1)  right-jaw closure fraction [0=open, 1=closed]
         robot_eef_pose/     (T_total, 6)  [ee_pos(3), ee_euler(3)] in robot-root frame
@@ -18,8 +20,7 @@ Saves episodes in diffusion-policy zarr format:
         timestamp/          (T_total, 1)  per-step timestamp (s, 0-based per episode)
       meta/
         episode_ends/       (N_episodes,) cumulative step count at each episode end
-    videos/
-      episode_000000.mp4    per-episode wrist-camera recording for human review
+    Optional review videos are only written when --save_videos is passed.
 
 Controls:
   GELLO handle   → arm joint positions
@@ -32,7 +33,7 @@ Controls:
 Usage:
   cd /home/wanglab22/3_chicken-isaaclab
   python scripts/imitation_learning/collect_isaac_demos.py \\
-      --out_dir ./data/isaac_chicken --num_demos 50
+      --out_dir ./data --num_demos 50
 """
 
 import argparse
@@ -50,7 +51,7 @@ if GELLO_SOFTWARE_DIR not in sys.path:
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Collect Isaac Sim chicken-lift demos via GELLO.")
-parser.add_argument("--out_dir",       type=str,  default="./data/isaac_chicken")
+parser.add_argument("--out_dir",       type=str,  default="./data")
 parser.add_argument("--num_demos",     type=int,  default=0,
                     help="Number of demos (0 = infinite).")
 parser.add_argument("--episode_steps", type=int,  default=300,
@@ -62,6 +63,12 @@ parser.add_argument("--diagnose",      action="store_true",
                     help="Print GELLO vs sim joint table for calibration.")
 parser.add_argument("--video_fps",     type=int,  default=30,
                     help="FPS for saved MP4 videos (default 30).")
+parser.add_argument("--save_videos", action="store_true",
+                    help="Also save per-episode MP4 review videos under <out_dir>/videos.")
+parser.add_argument("--image_key",     type=str,  default="camera_rgb",
+                    help="Zarr key for high-dimensional RGB observations.")
+parser.add_argument("--no_zarr_images", action="store_true",
+                    help="Skip storing camera frames inside replay_buffer.zarr.")
 parser.add_argument("--no_live_camera", action="store_true",
                     help="Disable the OpenCV camera popup to reduce teleop lag.")
 parser.add_argument("--live_camera_recording_only", action="store_true",
@@ -87,6 +94,10 @@ import omni.appwindow
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
+from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import (
+    CHICKEN_LIFT_MIN_HEIGHT,
+    CHICKEN_SPAWN_Z,
+)
 from isaaclab.utils.math import euler_xyz_from_quat
 
 try:
@@ -100,10 +111,10 @@ except ImportError:
 TASK_ID     = "Isaac-Lift-Chicken-UR10e-CustomGripper-GELLO-v0"
 SIM_STEP_DT = 0.02     # decimation=2, dt=0.01
 GRIPPER_THRESH = 0.5   # GELLO gripper fraction below this → open command
+ARM_IDLE_DEADBAND_RAD = 0.01  # Ignore tiny idle encoder changes when GELLO is not being moved.
+MAX_ARM_TARGET_STEP_RAD = 0.025  # Rate-limit absolute GELLO joint targets so PhysX contacts can resolve.
 ROBOT_BASE_Z = 0.63
-TABLE_TOP_Z = 0.6205
-CHICKEN_ROOT_ABOVE_TABLE_Z = 0.12635 + 0.005
-LIFT_HEIGHT_M = (TABLE_TOP_Z + CHICKEN_ROOT_ABOVE_TABLE_Z + 0.08) - ROBOT_BASE_Z
+LIFT_HEIGHT_M = CHICKEN_LIFT_MIN_HEIGHT - ROBOT_BASE_Z
 
 GELLO_SIGNS   = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
 GELLO_OFFSETS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -221,8 +232,9 @@ def extract_obs_dict(env_uw) -> dict:
     lj_frac = float(np.clip(robot.data.joint_pos[0, lj_ids].cpu().numpy() / -0.0093, 0.0, 1.0).mean())
     rj_frac = float(np.clip(robot.data.joint_pos[0, rj_ids].cpu().numpy() / -0.0093, 0.0, 1.0).mean())
 
-    # Chicken height relative to robot base (for stage/reward)
-    ck_z_r = float(scene["chicken"].data.root_pos_w[0, 2].item() - rb_pos[2])
+    # The final chicken USD is spawned as a plain scene asset for GELLO teleop,
+    # so it is not queried through an articulation/rigid-object data handle.
+    ck_z_r = float(CHICKEN_SPAWN_Z - rb_pos[2])
 
     return {
         "robot_joint":        robot_joint,
@@ -249,6 +261,21 @@ def get_camera_frame(env_uw) -> np.ndarray:
     return rgb_np
 
 
+def make_low_dim_state(obs_dict: dict) -> np.ndarray:
+    """Return the low-dimensional state vector used by diffusion-policy configs."""
+
+    state = np.concatenate(
+        [
+            obs_dict["robot_joint"],
+            obs_dict["robot_joint_vel"],
+            obs_dict["robot_eef_pose"],
+            obs_dict["left_jaw"],
+            obs_dict["right_jaw"],
+        ]
+    )
+    return state.astype(np.float32, copy=False)
+
+
 def get_sim_arm_joints(env_uw) -> np.ndarray:
     robot = env_uw.scene["robot"]
     ids, _ = robot.find_joints(_ARM_JOINT_NAMES)
@@ -257,11 +284,12 @@ def get_sim_arm_joints(env_uw) -> np.ndarray:
 
 def snap_to_gello(env_uw, gello: GelloReader) -> np.ndarray:
     gello_pos = gello.get_arm_joints() * GELLO_SIGNS + GELLO_OFFSETS
-    robot = env_uw.scene["robot"]
-    ids, _ = robot.find_joints(_ARM_JOINT_NAMES)
-    pos_t = torch.tensor(gello_pos, device=env_uw.device, dtype=torch.float32).unsqueeze(0)
-    robot.write_joint_position_to_sim(pos_t, joint_ids=ids)
     return gello_pos
+
+
+def rate_limit_arm_targets(prev: np.ndarray, target: np.ndarray, max_step: float) -> np.ndarray:
+    delta = np.clip(target - prev, -max_step, max_step)
+    return (prev + delta).astype(np.float32)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,6 +342,7 @@ class ZarrDemoWriter:
     # zarr array name → feature dimension
     FEATURES = {
         "action":             8,
+        "state":              20,
         "left_jaw":           1,
         "right_jaw":          1,
         "robot_eef_pose":     6,
@@ -324,14 +353,25 @@ class ZarrDemoWriter:
         "timestamp":          1,
     }
 
-    def __init__(self, out_dir: str, video_fps: int = 30):
+    def __init__(
+        self,
+        out_dir: str,
+        video_fps: int = 30,
+        image_key: str = "camera_rgb",
+        store_images: bool = True,
+        save_videos: bool = False,
+    ):
         root      = pathlib.Path(out_dir)
         zarr_path = root / "replay_buffer.zarr"
         vid_dir   = root / "videos"
-        vid_dir.mkdir(parents=True, exist_ok=True)
 
         self.vid_dir   = vid_dir
         self.video_fps = video_fps
+        self.image_key = image_key
+        self.store_images = store_images
+        self.save_videos = save_videos
+        if self.save_videos:
+            vid_dir.mkdir(parents=True, exist_ok=True)
 
         store      = zarr.DirectoryStore(str(zarr_path))
         self._root = zarr.open_group(store, mode="a")
@@ -348,9 +388,13 @@ class ZarrDemoWriter:
 
         print(f"[writer] zarr → {zarr_path}")
         print(f"[writer] Resuming: {self._n_episodes} episodes, {self._total_steps} steps")
+        self._migrate_state_if_needed()
+        if self.store_images:
+            self._validate_or_explain_resume_state()
 
         self._bufs: dict[str, list] = {k: [] for k in self.FEATURES}
         self._frames: list[np.ndarray] = []
+        self._zarr_images: list[np.ndarray] = []
 
     @property
     def n_episodes(self) -> int:
@@ -363,6 +407,7 @@ class ZarrDemoWriter:
     def add_step(self, obs_dict: dict, action: np.ndarray,
                  camera: np.ndarray | None, timestamp: float, stage: int = 0):
         self._bufs["action"].append(action.astype(np.float32))
+        self._bufs["state"].append(make_low_dim_state(obs_dict))
         self._bufs["left_jaw"].append(obs_dict["left_jaw"])
         self._bufs["right_jaw"].append(obs_dict["right_jaw"])
         self._bufs["robot_eef_pose"].append(obs_dict["robot_eef_pose"])
@@ -372,9 +417,13 @@ class ZarrDemoWriter:
         self._bufs["stage"].append(np.array([stage], dtype=np.float32))
         self._bufs["timestamp"].append(np.array([timestamp], dtype=np.float32))
 
-        if camera is not None and _HAS_CV2:
+        if camera is not None and _HAS_CV2 and self.save_videos:
             bgr = cv2.cvtColor(camera, cv2.COLOR_RGB2BGR)
             self._frames.append(bgr)
+        if self.store_images:
+            if camera is None:
+                raise RuntimeError("store_images=True but no camera frame was provided for this step.")
+            self._zarr_images.append(camera.astype(np.uint8, copy=False))
 
     def save_episode(self) -> bool:
         T = self.ep_len
@@ -392,7 +441,26 @@ class ZarrDemoWriter:
                 data_grp.create_dataset(key, data=arr,
                                         chunks=(100, dim), dtype="float32")
             else:
+                self._validate_append_shape(data_grp[key], arr, key)
                 data_grp[key].append(arr)
+
+        if self.store_images:
+            img_arr = np.stack(self._zarr_images).astype(np.uint8)  # (T, H, W, 3)
+            if self.image_key not in data_grp:
+                if self._total_steps != 0:
+                    raise RuntimeError(
+                        f"Cannot create image dataset '{self.image_key}' in a non-empty replay buffer. "
+                        "Start a fresh --out_dir for high-dimensional collection, or use --no_zarr_images."
+                    )
+                data_grp.create_dataset(
+                    self.image_key,
+                    data=img_arr,
+                    chunks=(min(32, T), *img_arr.shape[1:]),
+                    dtype="uint8",
+                )
+            else:
+                self._validate_append_shape(data_grp[self.image_key], img_arr, self.image_key)
+                data_grp[self.image_key].append(img_arr)
 
         # Update episode_ends in meta
         new_end = np.array([self._total_steps + T], dtype=np.int64)
@@ -430,6 +498,39 @@ class ZarrDemoWriter:
         for k in self._bufs:
             self._bufs[k].clear()
         self._frames.clear()
+        self._zarr_images.clear()
+
+    def _validate_or_explain_resume_state(self):
+        data_grp = self._root["data"]
+        if self._total_steps > 0 and self.image_key not in data_grp:
+            raise RuntimeError(
+                f"Existing dataset has {self._total_steps} low-dimensional steps but no "
+                f"data/{self.image_key} image array. Use a fresh --out_dir for image+state collection "
+                "or pass --no_zarr_images to continue low-dimensional-only collection."
+            )
+
+    def _migrate_state_if_needed(self):
+        data_grp = self._root["data"]
+        if self._total_steps == 0 or "state" in data_grp:
+            return
+        required_keys = ("robot_joint", "robot_joint_vel", "robot_eef_pose", "left_jaw", "right_jaw")
+        if not all(key in data_grp for key in required_keys):
+            return
+        lengths = {key: data_grp[key].shape[0] for key in required_keys}
+        if len(set(lengths.values())) != 1 or next(iter(lengths.values())) != self._total_steps:
+            raise RuntimeError(f"Cannot backfill data/state because existing low-dimensional lengths differ: {lengths}")
+
+        state = np.concatenate([data_grp[key][:] for key in required_keys], axis=1).astype(np.float32, copy=False)
+        data_grp.create_dataset("state", data=state, chunks=(100, state.shape[1]), dtype="float32")
+        print(f"[writer] Backfilled data/state from existing low-dimensional arrays: {state.shape}")
+
+    @staticmethod
+    def _validate_append_shape(existing, new_data: np.ndarray, key: str):
+        if len(existing.shape) != len(new_data.shape) or tuple(existing.shape[1:]) != tuple(new_data.shape[1:]):
+            raise RuntimeError(
+                f"Cannot append data/{key}: existing shape per step is {existing.shape[1:]}, "
+                f"new shape per step is {new_data.shape[1:]}."
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -460,18 +561,28 @@ def main():
     kb.add_callback("Q",         lambda: flags.update({"quit": True}))
 
     # ── writer ────────────────────────────────────────────────────────────────
-    writer = ZarrDemoWriter(args_cli.out_dir, video_fps=args_cli.video_fps)
+    writer = ZarrDemoWriter(
+        args_cli.out_dir,
+        video_fps=args_cli.video_fps,
+        image_key=args_cli.image_key,
+        store_images=not args_cli.no_zarr_images,
+        save_videos=args_cli.save_videos,
+    )
     print(f"\n[INFO] Output: {args_cli.out_dir}")
     print(f"[INFO] Resuming from {writer.n_episodes} episodes\n")
     print("Controls: C=record  S=save  Backspace=discard  Q=quit\n")
 
-    # ── startup: snap robot to GELLO's current pose ───────────────────────────
+    # ── startup: drive robot toward GELLO's current pose through articulation drives ──
     env.reset()
     rb_pos_z = env_uw.scene["robot"].data.root_pos_w[0, 2].item()  # type: ignore[union-attr]
     print(f"[DEBUG] Robot base Z after reset = {rb_pos_z:.4f}  (expected 0.63)")
-    gello_start = snap_to_gello(env_uw, gello)
-    for _ in range(10):
-        env.step(torch.tensor(np.array([*gello_start, 1.0, 1.0], dtype=np.float32),
+    robot = env_uw.scene["robot"]
+    arm_ids, _ = robot.find_joints(_ARM_JOINT_NAMES)
+    last_arm_joints = robot.data.joint_pos[0, arm_ids].cpu().numpy().astype(np.float32)
+    gello_start = snap_to_gello(env_uw, gello).astype(np.float32)
+    for _ in range(120):
+        last_arm_joints = rate_limit_arm_targets(last_arm_joints, gello_start, MAX_ARM_TARGET_STEP_RAD)
+        env.step(torch.tensor(np.array([*last_arm_joints, 1.0, 1.0], dtype=np.float32),
                               device=env_uw.device).unsqueeze(0))
     rb_pos_z = env_uw.scene["robot"].data.root_pos_w[0, 2].item()  # type: ignore[union-attr]
     print(f"[DEBUG] Robot base Z after snap  = {rb_pos_z:.4f}  (expected 0.63)")
@@ -491,6 +602,11 @@ def main():
         # ── GELLO read ────────────────────────────────────────────────────────
         gello_state  = gello.get_joints()
         arm_joints   = gello_state[:6].astype(np.float32) * GELLO_SIGNS + GELLO_OFFSETS
+        if np.max(np.abs(arm_joints - last_arm_joints)) < ARM_IDLE_DEADBAND_RAD:
+            arm_joints = last_arm_joints.copy()
+        else:
+            arm_joints = rate_limit_arm_targets(last_arm_joints, arm_joints, MAX_ARM_TARGET_STEP_RAD)
+            last_arm_joints = arm_joints.copy()
         gripper_frac = float(gello_state[6])
         gripper_bin  = 1.0 if gripper_frac < GRIPPER_THRESH else -1.0
         action_np    = np.array([*arm_joints, gripper_bin, gripper_bin], dtype=np.float32)
@@ -530,7 +646,10 @@ def main():
             ep_timestamp += SIM_STEP_DT
 
             if rec_steps % 50 == 0:
-                print(f"  [REC] {rec_steps} steps  (saved: {demos_saved})  reward={reward:.1f}")
+                print(
+                    f"  [REC] {rec_steps} steps  (saved: {demos_saved})  "
+                    f"reward={reward:.1f}"
+                )
 
             if rec_steps >= args_cli.episode_steps:
                 print("\n[INFO] Max episode length — auto-saving")
@@ -543,7 +662,7 @@ def main():
             flags.update({"recording": False, "save": False})
             rec_steps    = 0
             ep_timestamp = 0.0
-            _reset_env(env, env_uw, gello)
+            last_arm_joints = _reset_env(env, env_uw, gello).astype(np.float32).copy()
             print(f"  → {demos_saved} episodes saved. Press C for next.\n")
 
         # ── discard ───────────────────────────────────────────────────────────
@@ -552,7 +671,7 @@ def main():
             flags.update({"recording": False, "discard": False})
             rec_steps    = 0
             ep_timestamp = 0.0
-            _reset_env(env, env_uw, gello)
+            last_arm_joints = _reset_env(env, env_uw, gello).astype(np.float32).copy()
             print("  → Discarded. Press C for a new episode.\n")
 
         # ── auto-reset on env termination ─────────────────────────────────────
@@ -564,7 +683,7 @@ def main():
                 flags["recording"] = False
                 rec_steps    = 0
                 ep_timestamp = 0.0
-            _reset_env(env, env_uw, gello)
+            last_arm_joints = _reset_env(env, env_uw, gello).astype(np.float32).copy()
 
         loop_step += 1
 
@@ -578,10 +697,15 @@ def main():
 
 def _reset_env(env, env_uw, gello):
     env.reset()
-    g = snap_to_gello(env_uw, gello)
-    for _ in range(5):
-        env.step(torch.tensor(np.array([*g, 1.0, 1.0], dtype=np.float32),
+    robot = env_uw.scene["robot"]
+    ids, _ = robot.find_joints(_ARM_JOINT_NAMES)
+    current = robot.data.joint_pos[0, ids].cpu().numpy().astype(np.float32)
+    g = snap_to_gello(env_uw, gello).astype(np.float32)
+    for _ in range(120):
+        current = rate_limit_arm_targets(current, g, MAX_ARM_TARGET_STEP_RAD)
+        env.step(torch.tensor(np.array([*current, 1.0, 1.0], dtype=np.float32),
                               device=env_uw.device).unsqueeze(0))
+    return current
 
 
 if __name__ == "__main__":
