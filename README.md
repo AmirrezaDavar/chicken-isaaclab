@@ -1,211 +1,216 @@
-# ChicGrasp — Chicken Carcass Grasping with Isaac Lab + Diffusion Policy
+# Chicken IsaacLab Imitation Learning
 
-GPU-accelerated robot grasping simulation using **NVIDIA Isaac Lab** (Isaac Sim 5.1).
-A UR10e arm with a custom 4-jaw parallel gripper learns to pick up a chicken carcass by its legs
-via GELLO teleoperation and diffusion policy imitation learning.
+This repository contains the IsaacLab simulation side of the chicken grasping imitation-learning project.
 
----
+It provides:
 
-## Hardware & Software Requirements
+- UR10e + custom gripper simulation in IsaacLab.
+- Chicken asset and chicken lift task configuration.
+- GELLO teleoperation data collection.
+- Diffusion Policy zarr dataset inspection and visualization.
+- In-simulation evaluation of trained ChicGrasp/Diffusion Policy checkpoints.
 
-- NVIDIA GPU (tested on RTX 4080)
-- Ubuntu 22.04
-- Isaac Sim 5.1 pre-installed at `env_isaacsim/`
-- GELLO teleoperation device (Dynamixel-based, connected via USB-FTDI)
+The training code lives in the sibling repository:
 
----
+```text
+/home/wanglab22/ChicGrasp-IsaacChicken
+```
 
-## Environment Setup
+## Repository Roles
 
-The project uses a pre-built venv at `env_isaacsim/`. Run this **every time you open a new terminal**:
+```text
+/home/wanglab22/3_chicken-isaaclab
+  Isaac simulation, assets, teleop collection, zarr tools, policy evaluation.
+
+/home/wanglab22/ChicGrasp-IsaacChicken
+  Diffusion Policy algorithms, training configs, dataset loaders, checkpoints.
+```
+
+Keep collected datasets, checkpoints, videos, and plots out of Git.
+
+## Activate IsaacLab
+
+From this repository:
 
 ```bash
+cd /home/wanglab22/3_chicken-isaaclab
 source env_isaacsim/bin/activate
 ```
 
-You should see `(isaaclab-uv-workspace)` in your prompt.
-
-> **If `env_isaacsim/` is missing** after cloning, follow the
-> [Isaac Lab installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html)
-> and rebuild the venv.
-
-> **If the venv activate script has a stale path** (cloned to a different location):
-> ```bash
-> sed -i "s|VIRTUAL_ENV='.*env_isaacsim'|VIRTUAL_ENV='$(pwd)/env_isaacsim'|" env_isaacsim/bin/activate
-> source env_isaacsim/bin/activate
-> ```
-
----
-
-## Required Assets (not in git)
-
-The robot and chicken USD files are too large for git. You need them locally:
-
-| Asset | Path |
-|---|---|
-| Chicken USD | `my_assets/chicken/chicken/chicken.usd` |
-| UR10e + gripper USD | `Universal_Robots_ROS2_Description/urdf/1_fixed.usda` |
-
-Ask a team member for a copy or rebuild from URDF using the Isaac Sim URDF importer.
-
----
-
-## Teleoperation Demo Collection (GELLO)
-
-Collect demonstrations using the GELLO arm. Each episode is saved in
-**diffusion-policy zarr format** with separate array folders per feature.
-
-### Run
+Most Isaac scripts should be launched with:
 
 ```bash
-python scripts/imitation_learning/collect_isaac_demos.py \
-    --out_dir /home/wanglab22/ChicGrasp/data/isaac_chicken \
-    --num_demos 50
+./isaaclab.sh -p <script.py>
 ```
 
-### Controls
+## Collect Demonstrations
 
-| Key | Action |
-|---|---|
-| `C` | Start recording the current episode |
-| `S` | Stop and **save** the episode |
-| `Backspace` | **Discard** the current episode |
-| `Q` | Quit |
+Run:
 
-Move the GELLO arm to control the UR10e. The GELLO trigger closes/opens all 4 gripper jaws.
+```bash
+cd /home/wanglab22/3_chicken-isaaclab
 
-### Output structure
-
+./isaaclab.sh -p scripts/imitation_learning/01_collect_chicken_rgb_state_demos.py \
+  --out_dir ./data/chicken_rgb_state \
+  --num_demos 50 \
+  --save_videos
 ```
-/home/wanglab22/ChicGrasp/data/isaac_chicken/
+
+Controls:
+
+```text
+C          start recording
+S          finish and save current episode
+Backspace  discard current episode
+Q          quit
+```
+
+Notes:
+
+- Episodes are unlimited by default.
+- The camera preview shows a red recording dot and elapsed time while recording.
+- The chicken is randomized in X/Y after each episode.
+- If the chicken drops below the table, it is placed back on the table.
+- Videos are saved under `data/chicken_rgb_state/videos/`.
+
+Useful options:
+
+```bash
+--chicken_xy_range 0.08 0.12
+--chicken_seed 123
+--disable_chicken_drop_reset
+--episode_steps 300
+```
+
+## Dataset Layout
+
+Collection writes:
+
+```text
+data/chicken_rgb_state/
   replay_buffer.zarr/
     data/
-      action/             (T_total, 8)   arm joints(6) + left/right jaw binary(2)
-      left_jaw/           (T_total, 1)   left-jaw closure [0=open, 1=closed]
-      right_jaw/          (T_total, 1)   right-jaw closure [0=open, 1=closed]
-      robot_eef_pose/     (T_total, 6)   ee pos(3) + euler(3) in robot frame
-      robot_eef_pose_vel/ (T_total, 6)   ee lin_vel(3) + ang_vel(3)
-      robot_joint/        (T_total, 6)   arm joint positions (rad)
-      robot_joint_vel/    (T_total, 6)   arm joint velocities (rad/s)
-      stage/              (T_total, 1)   0=reaching, 1=chicken lifted
-      timestamp/          (T_total, 1)   seconds since episode start
+      action
+      state
+      camera_rgb
+      left_jaw
+      right_jaw
+      robot_eef_pose
+      robot_eef_pose_vel
+      robot_joint
+      robot_joint_vel
+      stage
+      timestamp
     meta/
-      episode_ends/       (N_episodes,)  cumulative step index at each episode boundary
+      episode_ends
   videos/
-    episode_000000.mp4    wrist-camera recording per episode (for human review)
 ```
 
-### Options
+The important training arrays are:
+
+```text
+data/action      # (T, 8)
+data/state       # (T, 20)
+data/camera_rgb  # (T, H, W, 3)
+```
+
+## Inspect And Visualize Data
+
+Inspect zarr structure:
 
 ```bash
-python scripts/imitation_learning/collect_isaac_demos.py \
-    --out_dir ./data/isaac_chicken \
-    --num_demos 50 \
-    --episode_steps 300 \       # max steps before auto-save (default 300)
-    --video_fps 30 \            # MP4 frame rate (default 30)
-    --gello_port /dev/ttyUSB0 \ # auto-detected if omitted
-    --diagnose                  # print GELLO↔sim joint table for calibration
+python scripts/imitation_learning/inspect_dp_zarr.py \
+  --zarr_path ./data/chicken_rgb_state/replay_buffer.zarr
 ```
 
-> **If `pyarrow`/`zarr` are missing** in the Isaac Sim Python:
-> ```bash
-> env_isaacsim/bin/python -m pip install "zarr>=2.12,<3"
-> ```
-
----
-
-## Visualise Collected Data
-
-Plot the low-dim zarr data **without Isaac Sim** (runs in the plain venv):
+Generate low-dimensional plots and camera contact sheets:
 
 ```bash
-# Dataset overview — all episodes at once
-python scripts/imitation_learning/plot_demos.py \
-    --zarr_path /home/wanglab22/ChicGrasp/data/isaac_chicken/replay_buffer.zarr
-
-# Single episode in detail (0-indexed)
-python scripts/imitation_learning/plot_demos.py \
-    --zarr_path /home/wanglab22/ChicGrasp/data/isaac_chicken/replay_buffer.zarr \
-    --episode 0
-
-# Save to PNG instead of interactive window
-python scripts/imitation_learning/plot_demos.py \
-    --zarr_path /home/wanglab22/ChicGrasp/data/isaac_chicken/replay_buffer.zarr \
-    --save overview.png
+python scripts/imitation_learning/visualize_chicken_zarr.py \
+  --zarr_path ./data/chicken_rgb_state/replay_buffer.zarr \
+  --episode 0
 ```
 
-**Overview mode** (no `--episode`):
-- Episode lengths with success (green = chicken lifted) / fail (red) colours
-- All arm joint trajectories overlaid across episodes
-- Gripper closure across all episodes
-- EE position & orientation
-- Lifted fraction per episode
-- Joint position histogram across all data
+This creates:
 
-**Single episode mode** (`--episode N`):
-- Arm joint positions & velocities
-- EE position & orientation
-- Jaw closure + stage timeline
-- Arm action targets and gripper commands
+```text
+data/chicken_rgb_state/plots/
+  dataset_overview.png
+  episode_000000_lowdim.png
+  episode_000000_camera_sheet.png
+```
 
----
+## Train Diffusion Policy
 
-## RL Training (Isaac Lab PPO)
-
-Train the UR10e + custom gripper to grasp the chicken autonomously:
+Training is run from the sibling repo, but this wrapper is provided here for convenience:
 
 ```bash
-# Train headless (recommended — fastest)
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
-    --headless --num_envs 1024 \
-    --task Isaac-Lift-Chicken-UR10e-CustomGripper-v0 \
-    +run_name=custom_gripper_v1
+cd /home/wanglab22/3_chicken-isaaclab
+conda activate robodiff
+unset PYTHONPATH
 
-# Play a trained policy
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
-    --num_envs 16 \
-    --task Isaac-Lift-Chicken-UR10e-CustomGripper-Play-v0 \
-    agent.resume=true "agent.load_run=.*custom_gripper_v1" \
-    agent.load_checkpoint=model_2000.pt
-
-# Monitor training in TensorBoard
-tensorboard --logdir logs/rsl_rl/ur10e_custom_gripper_chicken_lift
+python scripts/imitation_learning/02_train_chicken_rgb_state_policy.py \
+  --zarr_path /home/wanglab22/3_chicken-isaaclab/data/chicken_rgb_state/replay_buffer.zarr \
+  --num_epochs 450 \
+  --batch_size 32 \
+  --num_workers 4 \
+  --logging_mode offline
 ```
 
-### Available task IDs
+For full training details, see:
 
-| Task | ID |
-|---|---|
-| UR10e + custom gripper (simultaneous jaws) | `Isaac-Lift-Chicken-UR10e-CustomGripper-v0` |
-| UR10e + custom gripper (GELLO teleoperation) | `Isaac-Lift-Chicken-UR10e-CustomGripper-GELLO-v0` |
-| UR10e sequential jaw grasping | `Isaac-Lift-Chicken-UR10e-v0` |
-| Chicken balance locomotion | `Isaac-Balance-Chicken-v0` |
+```text
+/home/wanglab22/ChicGrasp-IsaacChicken/README.md
+```
 
----
+## Evaluate In Isaac Simulation
 
-## Key Source Files
+After training, evaluate a checkpoint:
 
-| File | Description |
-|---|---|
-| `scripts/imitation_learning/collect_isaac_demos.py` | GELLO demo collection → zarr format |
-| `scripts/imitation_learning/plot_demos.py` | Visualise collected zarr data |
-| `source/isaaclab_assets/.../robots/chicken.py` | Chicken asset configs |
-| `source/isaaclab_tasks/.../chicken_lift/chicken_lift_env_cfg.py` | Base env, rewards, observations |
-| `source/isaaclab_tasks/.../chicken_lift/config/ur10e_custom_gripper/gello_env_cfg.py` | GELLO teleoperation env + wrist camera config |
-| `source/isaaclab_tasks/.../chicken_lift/config/ur10e_custom_gripper/joint_pos_env_cfg.py` | UR10e + 4-jaw gripper RL env |
+```bash
+cd /home/wanglab22/3_chicken-isaaclab
 
----
+./isaaclab.sh -p scripts/imitation_learning/03_eval_chicken_rgb_state_policy.py \
+  --checkpoint /home/wanglab22/ChicGrasp-IsaacChicken/data/outputs/<date>/<run_name>/checkpoints/latest.ckpt \
+  --num_episodes 3 \
+  --episode_steps 300
+```
 
-## Common Issues
+Low-dimensional checkpoints can be evaluated with:
 
-**`ModuleNotFoundError: No module named 'isaaclab'`**
-→ Activate the venv: `source env_isaacsim/bin/activate`
+```bash
+./isaaclab.sh -p scripts/imitation_learning/eval_chicken_diffusion_policy.py \
+  --checkpoint /home/wanglab22/ChicGrasp-IsaacChicken/data/outputs/<date>/<run_name>/checkpoints/latest.ckpt \
+  --num_episodes 3 \
+  --episode_steps 300
+```
 
-**`NVML_ERROR_LIB_RM_VERSION_MISMATCH`**
-→ Driver/kernel mismatch after an update. Fix: `sudo reboot`
+## Main Files
 
-**GELLO not detected**
-→ Check USB connection. Verify with `ls /dev/serial/by-id/*FTDI*`. Pass the port explicitly with `--gello_port`.
+```text
+scripts/imitation_learning/01_collect_chicken_rgb_state_demos.py
+scripts/imitation_learning/02_train_chicken_rgb_state_policy.py
+scripts/imitation_learning/03_eval_chicken_rgb_state_policy.py
+scripts/imitation_learning/inspect_dp_zarr.py
+scripts/imitation_learning/visualize_chicken_zarr.py
 
-**Camera shows wrong angle in Isaac Sim**
-→ The wrist camera quaternion in `gello_env_cfg.py` is `rot=(0.0, 0.0, 0.462, 0.8875)` with `convention="ros"` — gives +125° pitch in the Isaac Sim Property panel.
+source/isaaclab_assets/isaaclab_assets/robots/chicken.py
+source/isaaclab_assets/isaaclab_assets/robots/universal_robots.py
+source/isaaclab_tasks/isaaclab_tasks/manager_based/manipulation/chicken_lift/
+```
+
+## Git Hygiene
+
+Do not commit:
+
+```text
+data/
+*.zarr/
+*.ckpt
+*.pt
+*.pth
+videos/
+plots/
+wandb/
+outputs/
+```
