@@ -78,6 +78,13 @@ parser.add_argument("--live_camera_recording_only", action="store_true",
                     help="Show the OpenCV camera popup only while recording.")
 parser.add_argument("--preview_stride", type=int, default=1,
                     help="Show one live preview frame every N sim steps.")
+parser.add_argument("--chicken_xy_range", type=float, nargs=2, default=(0.08, 0.12),
+                    metavar=("X_RANGE", "Y_RANGE"),
+                    help="Random chicken XY half-ranges in meters after each episode.")
+parser.add_argument("--chicken_seed", type=int, default=None,
+                    help="Random seed for chicken XY placement.")
+parser.add_argument("--disable_chicken_drop_reset", action="store_true",
+                    help="Do not automatically bring the chicken back if it drops below the table.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -91,15 +98,20 @@ import numpy as np
 import torch
 import zarr
 import gymnasium as gym
+from pxr import Usd, UsdGeom
 
 import carb.input
 import omni.appwindow
 
+import isaaclab.sim as sim_utils
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import (
+    CHICKEN_DROP_MIN_HEIGHT,
     CHICKEN_LIFT_MIN_HEIGHT,
     CHICKEN_SPAWN_Z,
+    TABLE_CENTER_X,
+    TABLE_CENTER_Y,
 )
 from isaaclab.utils.math import euler_xyz_from_quat
 
@@ -118,6 +130,8 @@ ARM_IDLE_DEADBAND_RAD = 0.01  # Ignore tiny idle encoder changes when GELLO is n
 MAX_ARM_TARGET_STEP_RAD = 0.025  # Rate-limit absolute GELLO joint targets so PhysX contacts can resolve.
 ROBOT_BASE_Z = 0.63
 LIFT_HEIGHT_M = CHICKEN_LIFT_MIN_HEIGHT - ROBOT_BASE_Z
+CHICKEN_SPAWN_ROT = np.array([0.0, 0.7071068, 0.7071068, 0.0], dtype=np.float32)
+CHICKEN_DROP_CHECK_INTERVAL = 15
 
 GELLO_SIGNS   = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
 GELLO_OFFSETS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -262,6 +276,81 @@ def get_camera_frame(env_uw) -> np.ndarray:
     if rgb_np.dtype != np.uint8:
         rgb_np = (rgb_np * 255.0).clip(0, 255).astype(np.uint8)
     return rgb_np
+
+
+def _find_chicken_prim() -> Usd.Prim:
+    stage = sim_utils.get_current_stage()
+    preferred = stage.GetPrimAtPath("/World/envs/env_0/Chicken")
+    if preferred.IsValid():
+        return preferred
+    for prim in stage.Traverse():
+        if prim.GetPath().pathString.endswith("/Chicken"):
+            return prim
+    raise RuntimeError("Could not find a USD prim ending in /Chicken.")
+
+
+def get_chicken_root_pos_w(env_uw) -> np.ndarray:
+    """Return chicken root position in world frame."""
+    try:
+        chicken = env_uw.scene["chicken"]
+        if hasattr(chicken, "data") and hasattr(chicken.data, "root_pos_w"):
+            return chicken.data.root_pos_w[0].detach().cpu().numpy().astype(np.float32)
+    except Exception:
+        pass
+
+    prim = _find_chicken_prim()
+    xform = UsdGeom.Xformable(prim)
+    world_tf = xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    return np.array(world_tf.ExtractTranslation(), dtype=np.float32)
+
+
+def random_chicken_xy(rng: np.random.Generator) -> tuple[float, float]:
+    x_half_range, y_half_range = args_cli.chicken_xy_range
+    x = TABLE_CENTER_X + float(rng.uniform(-abs(x_half_range), abs(x_half_range)))
+    y = TABLE_CENTER_Y + float(rng.uniform(-abs(y_half_range), abs(y_half_range)))
+    return x, y
+
+
+def place_chicken_on_table(env_uw, rng: np.random.Generator, reason: str) -> np.ndarray:
+    """Place the chicken on the table with randomized XY and zero root velocity when possible."""
+    pos = np.array([*random_chicken_xy(rng), CHICKEN_SPAWN_Z], dtype=np.float32)
+    quat = CHICKEN_SPAWN_ROT.copy()
+
+    moved_with_asset_api = False
+    try:
+        chicken = env_uw.scene["chicken"]
+        root_pose = torch.tensor([*pos, *quat], dtype=torch.float32, device=env_uw.device).unsqueeze(0)
+        if hasattr(chicken, "write_root_pose_to_sim"):
+            chicken.write_root_pose_to_sim(root_pose)
+            moved_with_asset_api = True
+        if hasattr(chicken, "write_root_velocity_to_sim"):
+            root_vel = torch.zeros((1, 6), dtype=torch.float32, device=env_uw.device)
+            chicken.write_root_velocity_to_sim(root_vel)
+        if hasattr(chicken, "reset"):
+            chicken.reset()
+    except Exception:
+        moved_with_asset_api = False
+
+    if not moved_with_asset_api:
+        prim = _find_chicken_prim()
+        sim_utils.standardize_xform_ops(
+            prim,
+            translation=tuple(float(v) for v in pos),
+            orientation=tuple(float(v) for v in quat),
+        )
+
+    print(f"[chicken] {reason}: placed at x={pos[0]:+.3f}, y={pos[1]:+.3f}, z={pos[2]:+.3f}")
+    return pos
+
+
+def recover_chicken_if_dropped(env_uw, rng: np.random.Generator) -> bool:
+    if args_cli.disable_chicken_drop_reset:
+        return False
+    pos = get_chicken_root_pos_w(env_uw)
+    if float(pos[2]) < CHICKEN_DROP_MIN_HEIGHT:
+        place_chicken_on_table(env_uw, rng, reason="drop reset")
+        return True
+    return False
 
 
 def draw_recording_overlay(rgb_frame: np.ndarray, recording: bool, elapsed_s: float) -> np.ndarray:
@@ -634,6 +723,7 @@ def main():
     env_cfg.episode_length_s = 10000.0
     env    = gym.make(TASK_ID, cfg=env_cfg)
     env_uw = env.unwrapped
+    rng = np.random.default_rng(args_cli.chicken_seed)
 
     gello_port = args_cli.gello_port or _find_gello_port()
     gello = GelloReader(port=gello_port, calib_path=args_cli.calib_path)
@@ -666,6 +756,7 @@ def main():
 
     # ── startup: drive robot toward GELLO's current pose through articulation drives ──
     env.reset()
+    place_chicken_on_table(env_uw, rng, reason="initial placement")
     rb_pos_z = env_uw.scene["robot"].data.root_pos_w[0, 2].item()  # type: ignore[union-attr]
     print(f"[DEBUG] Robot base Z after reset = {rb_pos_z:.4f}  (expected 0.63)")
     robot = env_uw.scene["robot"]
@@ -729,8 +820,14 @@ def main():
         _, _, terminated, truncated, _ = env.step(
             torch.tensor(action_np, device=env_uw.device).unsqueeze(0))
 
+        dropped = False
+        if loop_step % CHICKEN_DROP_CHECK_INTERVAL == 0:
+            dropped = recover_chicken_if_dropped(env_uw, rng)
+            if dropped and flags["recording"]:
+                print("[chicken] dropped during recording; reset on table and skipped this sample")
+
         # ── record ────────────────────────────────────────────────────────────
-        if flags["recording"]:
+        if flags["recording"] and not dropped:
             if cam_frame is None:
                 cam_frame = get_camera_frame(env_uw)
             writer.add_step(obs_dict, action_np, cam_frame,
@@ -755,7 +852,7 @@ def main():
             flags.update({"recording": False, "save": False})
             rec_steps    = 0
             ep_timestamp = 0.0
-            last_arm_joints = _reset_env(env, env_uw, gello).astype(np.float32).copy()
+            last_arm_joints = _reset_env(env, env_uw, gello, rng).astype(np.float32).copy()
             print(f"  → {demos_saved} episodes saved. Press C for next.\n")
 
         # ── discard ───────────────────────────────────────────────────────────
@@ -764,7 +861,7 @@ def main():
             flags.update({"recording": False, "discard": False})
             rec_steps    = 0
             ep_timestamp = 0.0
-            last_arm_joints = _reset_env(env, env_uw, gello).astype(np.float32).copy()
+            last_arm_joints = _reset_env(env, env_uw, gello, rng).astype(np.float32).copy()
             print("  → Discarded. Press C for a new episode.\n")
 
         # ── auto-reset on env termination ─────────────────────────────────────
@@ -776,7 +873,7 @@ def main():
                 flags["recording"] = False
                 rec_steps    = 0
                 ep_timestamp = 0.0
-            last_arm_joints = _reset_env(env, env_uw, gello).astype(np.float32).copy()
+            last_arm_joints = _reset_env(env, env_uw, gello, rng).astype(np.float32).copy()
 
         loop_step += 1
 
@@ -790,8 +887,9 @@ def main():
     print(f"\nDone. {demos_saved} episodes in {args_cli.out_dir}/replay_buffer.zarr/")
 
 
-def _reset_env(env, env_uw, gello):
+def _reset_env(env, env_uw, gello, rng: np.random.Generator):
     env.reset()
+    place_chicken_on_table(env_uw, rng, reason="episode reset")
     robot = env_uw.scene["robot"]
     ids, _ = robot.find_joints(_ARM_JOINT_NAMES)
     current = robot.data.joint_pos[0, ids].cpu().numpy().astype(np.float32)

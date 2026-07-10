@@ -33,6 +33,10 @@ Episodes are unlimited by default. The live camera preview shows a red recording
 dot and elapsed recording time. With `--save_videos`, MP4 review videos are saved
 automatically under `data/chicken_rgb_state/videos/`.
 
+During collection, the chicken is randomized on the tabletop in XY after every
+episode. If it drops below the table, the collector places it back on the table.
+The default XY randomization half-ranges are `0.08 m` in X and `0.12 m` in Y.
+
 ### 2. Train RGB + Low-Dim Diffusion Policy
 
 ```bash
@@ -94,6 +98,14 @@ the live GELLO control loop.
 
 Episodes are unlimited unless you explicitly pass a positive `--episode_steps`.
 Press `C` to start and `S` to finish/save.
+
+Chicken placement options:
+
+```bash
+--chicken_xy_range 0.08 0.12       # random XY half-ranges in meters
+--chicken_seed 123                 # repeatable randomization
+--disable_chicken_drop_reset       # leave chicken where it falls
+```
 
 Inspect a dataset:
 
