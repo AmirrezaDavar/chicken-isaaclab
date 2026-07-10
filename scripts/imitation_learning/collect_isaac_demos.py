@@ -57,8 +57,8 @@ parser = argparse.ArgumentParser(description="Collect Isaac Sim chicken-lift dem
 parser.add_argument("--out_dir",       type=str,  default="./data")
 parser.add_argument("--num_demos",     type=int,  default=0,
                     help="Number of demos (0 = infinite).")
-parser.add_argument("--episode_steps", type=int,  default=300,
-                    help="Max steps per episode before auto-save.")
+parser.add_argument("--episode_steps", type=int,  default=0,
+                    help="Max steps per episode before auto-save. 0 disables auto-save.")
 parser.add_argument("--gello_port",    type=str,  default=None)
 parser.add_argument("--calib_path",    type=str,
                     default=os.path.join(GELLO_SOFTWARE_DIR, "gello_calibration.json"))
@@ -262,6 +262,39 @@ def get_camera_frame(env_uw) -> np.ndarray:
     if rgb_np.dtype != np.uint8:
         rgb_np = (rgb_np * 255.0).clip(0, 255).astype(np.uint8)
     return rgb_np
+
+
+def draw_recording_overlay(rgb_frame: np.ndarray, recording: bool, elapsed_s: float) -> np.ndarray:
+    """Return BGR preview frame with recording status overlay."""
+    bgr = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
+    if not recording:
+        cv2.putText(
+            bgr,
+            "READY",
+            (18, 38),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (230, 230, 230),
+            2,
+            cv2.LINE_AA,
+        )
+        return bgr
+
+    mins = int(elapsed_s // 60)
+    secs = int(elapsed_s % 60)
+    label = f"REC {mins:02d}:{secs:02d}"
+    cv2.circle(bgr, (30, 30), 10, (0, 0, 255), -1, cv2.LINE_AA)
+    cv2.putText(
+        bgr,
+        label,
+        (50, 39),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 0, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    return bgr
 
 
 def make_low_dim_state(obs_dict: dict) -> np.ndarray:
@@ -686,7 +719,8 @@ def main():
 
         # ── live camera popup ────────────────────────────────────────────────
         if need_preview and cam_frame is not None:
-            cv2.imshow("RealSense Camera", cv2.cvtColor(cam_frame, cv2.COLOR_RGB2BGR))
+            preview = draw_recording_overlay(cam_frame, flags["recording"], ep_timestamp)
+            cv2.imshow("RealSense Camera", preview)
             cv2.waitKey(1)
         elif preview_allowed:
             cv2.waitKey(1)
@@ -710,7 +744,7 @@ def main():
                     f"reward={reward:.1f}"
                 )
 
-            if rec_steps >= args_cli.episode_steps:
+            if args_cli.episode_steps > 0 and rec_steps >= args_cli.episode_steps:
                 print("\n[INFO] Max episode length — auto-saving")
                 flags["save"] = True
 

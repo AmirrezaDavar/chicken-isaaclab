@@ -11,7 +11,6 @@ Example:
   ./env_isaacsim/bin/python scripts/imitation_learning/01_collect_chicken_rgb_state_demos.py \
       --out_dir ./data/chicken_rgb_state \
       --num_demos 50 \
-      --episode_steps 300 \
       --save_videos
 """
 
