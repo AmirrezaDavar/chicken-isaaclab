@@ -18,7 +18,7 @@ cd /home/wanglab22/3_chicken-isaaclab
   --out_dir ./data/chicken_rgb_state \
   --num_demos 50 \
   --episode_steps 300 \
-  --save_videos
+  --preview_stride 5
 ```
 
 Keyboard controls during collection:
@@ -30,8 +30,13 @@ Backspace  discard current episode
 Q          quit
 ```
 
-The live camera preview is shown in an OpenCV window. Saved MP4 review videos
-are written under `data/chicken_rgb_state/videos/` when `--save_videos` is used.
+The live camera preview is shown in an OpenCV window. For smoother teleoperation,
+do not encode MP4 videos during collection. Export review videos afterward:
+
+```bash
+python scripts/imitation_learning/export_chicken_zarr_videos.py \
+  --zarr_path ./data/chicken_rgb_state/replay_buffer.zarr
+```
 
 ### 2. Train RGB + Low-Dim Diffusion Policy
 
@@ -70,7 +75,7 @@ cd /home/wanglab22/3_chicken-isaaclab
   --out_dir ./data/chicken_rgb_state \
   --num_demos 50 \
   --episode_steps 300 \
-  --save_videos
+  --preview_stride 5
 ```
 
 The default dataset layout is:
@@ -88,8 +93,13 @@ data/chicken_rgb_state/
       episode_ends
 ```
 
-Review videos are written under `data/chicken_rgb_state/videos/` when
-`--save_videos` is passed, but they are ignored by Git.
+The collector stores RGB frames in zarr for training. Export MP4 review videos
+after collection to avoid blocking the real-time GELLO loop:
+
+```bash
+python scripts/imitation_learning/export_chicken_zarr_videos.py \
+  --zarr_path ./data/chicken_rgb_state/replay_buffer.zarr
+```
 
 Inspect a dataset:
 
