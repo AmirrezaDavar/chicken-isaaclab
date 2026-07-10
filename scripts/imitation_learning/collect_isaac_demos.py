@@ -40,6 +40,9 @@ import argparse
 import pathlib
 import sys
 import os
+import queue
+import threading
+import traceback
 
 GELLO_SOFTWARE_DIR = (
     "/home/wanglab22/1_gello_software"
@@ -395,6 +398,14 @@ class ZarrDemoWriter:
         self._bufs: dict[str, list] = {k: [] for k in self.FEATURES}
         self._frames: list[np.ndarray] = []
         self._zarr_images: list[np.ndarray] = []
+        self._write_queue: queue.Queue[dict | None] = queue.Queue()
+        self._worker_error: BaseException | None = None
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop,
+            name="chicken-demo-writer",
+            daemon=False,
+        )
+        self._writer_thread.start()
 
     @property
     def n_episodes(self) -> int:
@@ -406,6 +417,7 @@ class ZarrDemoWriter:
 
     def add_step(self, obs_dict: dict, action: np.ndarray,
                  camera: np.ndarray | None, timestamp: float, stage: int = 0):
+        self._raise_worker_error_if_needed()
         self._bufs["action"].append(action.astype(np.float32))
         self._bufs["state"].append(make_low_dim_state(obs_dict))
         self._bufs["left_jaw"].append(obs_dict["left_jaw"])
@@ -426,73 +438,50 @@ class ZarrDemoWriter:
             self._zarr_images.append(camera.astype(np.uint8, copy=False))
 
     def save_episode(self) -> bool:
+        self._raise_worker_error_if_needed()
         T = self.ep_len
         if T == 0:
             print("[writer] nothing to save (episode empty)")
             return False
 
-        data_grp = self._root["data"]
-        meta_grp = self._root["meta"]
-
-        # Append each feature array to zarr
+        ep_idx = self._n_episodes
+        new_total_steps = self._total_steps + T
+        payload = {
+            "episode_idx": ep_idx,
+            "length": T,
+            "total_steps": new_total_steps,
+            "features": {},
+            "images": None,
+            "frames": [],
+        }
         for key, dim in self.FEATURES.items():
-            arr = np.stack(self._bufs[key]).astype(np.float32)  # (T, dim)
-            if key not in data_grp:
-                data_grp.create_dataset(key, data=arr,
-                                        chunks=(100, dim), dtype="float32")
-            else:
-                self._validate_append_shape(data_grp[key], arr, key)
-                data_grp[key].append(arr)
+            payload["features"][key] = np.stack(self._bufs[key]).astype(np.float32)
 
         if self.store_images:
-            img_arr = np.stack(self._zarr_images).astype(np.uint8)  # (T, H, W, 3)
-            if self.image_key not in data_grp:
-                if self._total_steps != 0:
-                    raise RuntimeError(
-                        f"Cannot create image dataset '{self.image_key}' in a non-empty replay buffer. "
-                        "Start a fresh --out_dir for high-dimensional collection, or use --no_zarr_images."
-                    )
-                data_grp.create_dataset(
-                    self.image_key,
-                    data=img_arr,
-                    chunks=(min(32, T), *img_arr.shape[1:]),
-                    dtype="uint8",
-                )
-            else:
-                self._validate_append_shape(data_grp[self.image_key], img_arr, self.image_key)
-                data_grp[self.image_key].append(img_arr)
-
-        # Update episode_ends in meta
-        new_end = np.array([self._total_steps + T], dtype=np.int64)
-        if "episode_ends" not in meta_grp:
-            meta_grp.create_dataset("episode_ends", data=new_end,
-                                    chunks=(100,), dtype="int64")
-        else:
-            meta_grp["episode_ends"].append(new_end)
-
-        self._total_steps += T
-        print(f"[writer] zarr ← episode {self._n_episodes}  ({T} steps, total {self._total_steps})")
-
-        # Save MP4 for human review
-        ep_name = f"episode_{self._n_episodes:06d}"
-        if self._frames and _HAS_CV2:
-            vpath  = self.vid_dir / f"{ep_name}.mp4"
-            h, w   = self._frames[0].shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            out    = cv2.VideoWriter(str(vpath), fourcc, self.video_fps, (w, h))
-            for frame in self._frames:
-                out.write(frame)
-            out.release()
-            print(f"[writer] mp4  → {vpath}  ({len(self._frames)} frames @ {self.video_fps} fps)")
+            payload["images"] = np.stack(self._zarr_images).astype(np.uint8)
+        if self.save_videos and self._frames:
+            payload["frames"] = list(self._frames)
 
         self._n_episodes += 1
+        self._total_steps = new_total_steps
+        self._write_queue.put(payload)
+        print(
+            f"[writer] queued episode {ep_idx}  "
+            f"({T} steps, total {self._total_steps}, pending writes={self._write_queue.qsize()})"
+        )
         self._reset_buffers()
         return True
 
     def discard_episode(self):
+        self._raise_worker_error_if_needed()
         n = self.ep_len
         self._reset_buffers()
         print(f"[writer] discarded {n} steps")
+
+    def close(self):
+        self._write_queue.put(None)
+        self._writer_thread.join()
+        self._raise_worker_error_if_needed()
 
     def _reset_buffers(self):
         for k in self._bufs:
@@ -531,6 +520,76 @@ class ZarrDemoWriter:
                 f"Cannot append data/{key}: existing shape per step is {existing.shape[1:]}, "
                 f"new shape per step is {new_data.shape[1:]}."
             )
+
+    def _writer_loop(self):
+        while True:
+            payload = self._write_queue.get()
+            try:
+                if payload is None:
+                    return
+                self._write_episode_payload(payload)
+            except BaseException as exc:
+                self._worker_error = exc
+                traceback.print_exc()
+            finally:
+                self._write_queue.task_done()
+
+    def _write_episode_payload(self, payload: dict):
+        data_grp = self._root["data"]
+        meta_grp = self._root["meta"]
+        ep_idx = payload["episode_idx"]
+        T = payload["length"]
+
+        for key, dim in self.FEATURES.items():
+            arr = payload["features"][key]
+            if key not in data_grp:
+                data_grp.create_dataset(key, data=arr, chunks=(100, dim), dtype="float32")
+            else:
+                self._validate_append_shape(data_grp[key], arr, key)
+                data_grp[key].append(arr)
+
+        img_arr = payload["images"]
+        if img_arr is not None:
+            if self.image_key not in data_grp:
+                if payload["total_steps"] != T:
+                    raise RuntimeError(
+                        f"Cannot create image dataset '{self.image_key}' after earlier non-image steps. "
+                        "Start a fresh --out_dir for high-dimensional collection."
+                    )
+                data_grp.create_dataset(
+                    self.image_key,
+                    data=img_arr,
+                    chunks=(min(32, T), *img_arr.shape[1:]),
+                    dtype="uint8",
+                )
+            else:
+                self._validate_append_shape(data_grp[self.image_key], img_arr, self.image_key)
+                data_grp[self.image_key].append(img_arr)
+
+        new_end = np.array([payload["total_steps"]], dtype=np.int64)
+        if "episode_ends" not in meta_grp:
+            meta_grp.create_dataset("episode_ends", data=new_end, chunks=(100,), dtype="int64")
+        else:
+            meta_grp["episode_ends"].append(new_end)
+        print(f"[writer] zarr ← episode {ep_idx}  ({T} steps, total {payload['total_steps']})")
+
+        frames = payload["frames"]
+        if frames and _HAS_CV2:
+            ep_name = f"episode_{ep_idx:06d}"
+            vpath = self.vid_dir / f"{ep_name}.mp4"
+            h, w = frames[0].shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            out = cv2.VideoWriter(str(vpath), fourcc, self.video_fps, (w, h))
+            if not out.isOpened():
+                raise RuntimeError(f"Failed to open video writer: {vpath}")
+            for frame in frames:
+                out.write(frame)
+            out.release()
+            print(f"[writer] mp4  → {vpath}  ({len(frames)} frames @ {self.video_fps} fps)")
+
+    def _raise_worker_error_if_needed(self):
+        if self._worker_error is not None:
+            raise RuntimeError("Background demo writer failed.") from self._worker_error
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -689,6 +748,8 @@ def main():
 
     # ── cleanup ───────────────────────────────────────────────────────────────
     kb.close()
+    print("[writer] Waiting for queued zarr/video writes to finish...")
+    writer.close()
     if _HAS_CV2:
         cv2.destroyAllWindows()
     env.close()

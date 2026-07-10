@@ -12,7 +12,7 @@ Example:
       --out_dir ./data/chicken_rgb_state \
       --num_demos 50 \
       --episode_steps 300 \
-      --preview_stride 5
+      --save_videos
 """
 
 from __future__ import annotations
@@ -40,8 +40,6 @@ def main() -> None:
         sys.argv.extend(["--out_dir", "./data/chicken_rgb_state"])
     if not _has_arg("--image_key"):
         sys.argv.extend(["--image_key", "camera_rgb"])
-    if not _has_arg("--preview_stride"):
-        sys.argv.extend(["--preview_stride", "5"])
 
     sys.argv[0] = str(script)
     runpy.run_path(str(script), run_name="__main__")
