@@ -102,6 +102,23 @@ python scripts/imitation_learning/inspect_dp_zarr.py \
   --zarr_path ./data/chicken_rgb_state/replay_buffer.zarr
 ```
 
+Plot low-dimensional signals and camera samples:
+
+```bash
+python scripts/imitation_learning/visualize_chicken_zarr.py \
+  --zarr_path ./data/chicken_rgb_state/replay_buffer.zarr \
+  --episode 0
+```
+
+This writes:
+
+```text
+data/chicken_rgb_state/plots/
+  dataset_overview.png
+  episode_000000_lowdim.png
+  episode_000000_camera_sheet.png
+```
+
 ## 2. ChicGrasp Environment
 
 Install Miniforge if needed, then create the training environment:
