@@ -11,7 +11,8 @@ Example:
   ./env_isaacsim/bin/python scripts/imitation_learning/01_collect_chicken_rgb_state_demos.py \
       --out_dir ./data/chicken_rgb_state \
       --num_demos 50 \
-      --episode_steps 300
+      --episode_steps 300 \
+      --save_videos
 """
 
 from __future__ import annotations
@@ -39,8 +40,6 @@ def main() -> None:
         sys.argv.extend(["--out_dir", "./data/chicken_rgb_state"])
     if not _has_arg("--image_key"):
         sys.argv.extend(["--image_key", "camera_rgb"])
-    if not _has_arg("--live_camera_recording_only") and not _has_arg("--no_live_camera"):
-        sys.argv.append("--live_camera_recording_only")
 
     sys.argv[0] = str(script)
     runpy.run_path(str(script), run_name="__main__")

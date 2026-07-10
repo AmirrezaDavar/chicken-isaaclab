@@ -17,7 +17,8 @@ cd /home/wanglab22/3_chicken-isaaclab
 ./isaaclab.sh -p scripts/imitation_learning/01_collect_chicken_rgb_state_demos.py \
   --out_dir ./data/chicken_rgb_state \
   --num_demos 50 \
-  --episode_steps 300
+  --episode_steps 300 \
+  --save_videos
 ```
 
 Keyboard controls during collection:
@@ -28,6 +29,9 @@ S          save current episode
 Backspace  discard current episode
 Q          quit
 ```
+
+The live camera preview is shown in an OpenCV window. Saved MP4 review videos
+are written under `data/chicken_rgb_state/videos/` when `--save_videos` is used.
 
 ### 2. Train RGB + Low-Dim Diffusion Policy
 
@@ -65,7 +69,8 @@ cd /home/wanglab22/3_chicken-isaaclab
 ./isaaclab.sh -p scripts/imitation_learning/01_collect_chicken_rgb_state_demos.py \
   --out_dir ./data/chicken_rgb_state \
   --num_demos 50 \
-  --episode_steps 300
+  --episode_steps 300 \
+  --save_videos
 ```
 
 The default dataset layout is:
@@ -83,7 +88,8 @@ data/chicken_rgb_state/
       episode_ends
 ```
 
-Optional review videos can be enabled with `--save_videos`, but they are ignored by Git.
+Review videos are written under `data/chicken_rgb_state/videos/` when
+`--save_videos` is passed, but they are ignored by Git.
 
 Inspect a dataset:
 
