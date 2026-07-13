@@ -22,12 +22,31 @@ from . import joint_pos_env_cfg
 
 CAM_H = 480
 CAM_W = 640
+SIDE_CAM_H = 360
+SIDE_CAM_W = 480
 
 _GRIPPER_OPEN  =  0.0
 _GRIPPER_CLOSE = -0.0093   # physical hard-stop (meters)
 # Command target pushed 5 mm past the hard-stop so the spring is compressed even
 # when the chicken leg blocks the jaw before it reaches the real limit.
 _GRIPPER_CLOSE_CMD = -0.0093
+
+
+def _table_camera_cfg(name: str, pos: tuple[float, float, float], rot: tuple[float, float, float, float]) -> CameraCfg:
+    return CameraCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/{name}",
+        update_period=0,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=18.0,
+            focus_distance=1.0,
+            horizontal_aperture=36.0,
+            clipping_range=(0.02, 10.0),
+        ),
+        width=SIDE_CAM_W,
+        height=SIDE_CAM_H,
+        offset=CameraCfg.OffsetCfg(pos=pos, rot=rot, convention="opengl"),
+    )
 
 
 @configclass
@@ -158,6 +177,27 @@ class UR10eCustomGripperChickenLiftGelloEnvCfg(joint_pos_env_cfg.UR10eCustomGrip
                 rot=(0.0, 0.0, 0.462, 0.8875),
                 convention="ros",
             ),
+        )
+
+        # ── Static side cameras for operator review and optional high-dim data ──
+        # These are fixed on the left/right side of the table and look toward the
+        # chicken spawn region. They are not used by the current policy config
+        # unless a training config explicitly consumes their zarr keys.
+        self.scene.left_camera = _table_camera_cfg(
+            "left_table_camera",
+            # Isaac Sim Property panel:
+            #   Translate: (-0.6, 0.5, 0.7)
+            #   Orient XYZ: (-82.0, 0.0, 180.0)
+            pos=(-0.6, 0.5, 0.7),
+            rot=(0.0, 0.0, 0.656059, 0.754710),
+        )
+        self.scene.right_camera = _table_camera_cfg(
+            "right_table_camera",
+            # Isaac Sim Property panel:
+            #   Translate: (0.0, -0.5, 1.4)
+            #   Orient XYZ: (56.0, 38.0, 27.0)
+            pos=(0.0, -0.5, 1.4),
+            rot=(0.776096, 0.498735, 0.175892, 0.343512),
         )
 
         # Single environment for teleoperation
