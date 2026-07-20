@@ -121,7 +121,7 @@ parser.add_argument("--spacemouse_pos_sensitivity", type=float, default=0.20,
 parser.add_argument("--spacemouse_rot_sensitivity", type=float, default=0.50,
                     help="SpaceMouse rotational sensitivity before rotation gating.")
 parser.add_argument("--spacemouse_home_joints_deg", type=float, nargs=6,
-                    default=(0.0, -100, -100, -70, 90.0, 0.0),
+                    default=(0.0, -115, -90, -65, 90.0, 0.0),
                     metavar=("PAN", "SHOULDER", "ELBOW", "WRIST1", "WRIST2", "WRIST3"),
                     help="SpaceMouse reset/home arm joints in degrees.")
 parser.add_argument("--spacemouse_orientation_lock_gain", type=float, default=0.8,
