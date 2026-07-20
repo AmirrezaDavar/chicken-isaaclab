@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 """
-Collect teleoperated chicken demonstrations in Isaac Sim using a GELLO device.
+Collect teleoperated chicken demonstrations in Isaac Sim using a GELLO device
+or SpaceMouse.
 
 Saves episodes in diffusion-policy zarr format:
   <out_dir>/
@@ -25,6 +26,9 @@ Saves episodes in diffusion-policy zarr format:
 Controls:
   GELLO handle   → arm joint positions
   GELLO trigger  → all 4 gripper jaws
+  SpaceMouse     → Cartesian XY motion; left button toggles Z motion;
+                   right button toggles rotation
+  G              → toggle gripper open/closed in SpaceMouse mode
   C              → START recording
   S              → STOP + SAVE (writes zarr arrays + mp4)
   Backspace      → discard current episode
@@ -58,6 +62,8 @@ parser = argparse.ArgumentParser(description="Collect Isaac Sim chicken demos vi
 parser.add_argument("--out_dir",       type=str,  default="./data/chicken_rgb_state")
 parser.add_argument("--num_demos",     type=int,  default=150,
                     help="Number of demos (0 = infinite).")
+parser.add_argument("--teleop_device", type=str, choices=("gello", "spacemouse"), default="gello",
+                    help="Teleoperation device. GELLO keeps absolute joint actions; SpaceMouse uses IK-relative actions.")
 parser.add_argument("--episode_steps", type=int,  default=0,
                     help="Max steps per episode before auto-save. 0 disables auto-save.")
 parser.add_argument("--gello_port",    type=str,  default=None)
@@ -110,6 +116,14 @@ parser.add_argument("--robot_start_noise_deg", type=float, nargs=6,
                     default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                     metavar=("J1", "J2", "J3", "J4", "J5", "J6"),
                     help="Per-episode GELLO-to-sim joint offset half-ranges in degrees.")
+parser.add_argument("--spacemouse_pos_sensitivity", type=float, default=0.20,
+                    help="SpaceMouse translational sensitivity before per-axis gating.")
+parser.add_argument("--spacemouse_rot_sensitivity", type=float, default=0.50,
+                    help="SpaceMouse rotational sensitivity before rotation gating.")
+parser.add_argument("--spacemouse_home_joints_deg", type=float, nargs=6,
+                    default=(0.0, -100, -100, -70, 90.0, 0.0),
+                    metavar=("PAN", "SHOULDER", "ELBOW", "WRIST1", "WRIST2", "WRIST3"),
+                    help="SpaceMouse reset/home arm joints in degrees.")
 parser.add_argument("--auto_stop_on_lift", action=argparse.BooleanOptionalAction, default=True,
                     help="Automatically save when the chicken has been lifted and held above threshold.")
 parser.add_argument("--success_lift_height", type=float, default=0.0800,
@@ -131,7 +145,7 @@ parser.add_argument("--disable_table_bounds", action="store_true",
                     help="Allow chicken randomization to exceed safe tabletop footprint limits.")
 parser.add_argument("--disable_chicken_drop_reset", action="store_true",
                     help="Do not automatically bring the chicken back if it drops below the table.")
-parser.add_argument("--max_gripper_height_above_table", type=float, default=0.10,
+parser.add_argument("--max_gripper_height_above_table", type=float, default=0.0,
                     help="Max gripper-tip height above the table in meters. <=0 disables the clamp.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -153,7 +167,9 @@ import omni.appwindow
 
 import isaaclab.sim as sim_utils
 import isaaclab_tasks  # noqa: F401
-from isaaclab.assets import RigidObjectCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+from isaaclab.devices import Se3SpaceMouse, Se3SpaceMouseCfg
+from isaaclab.sensors import CameraCfg
 from isaaclab_tasks.utils import parse_env_cfg
 from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import (
     CHICKEN_DROP_MIN_HEIGHT,
@@ -173,7 +189,9 @@ except ImportError:
     print("[WARN] opencv-python not found — camera view + MP4 disabled.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-TASK_ID     = "Isaac-Lift-Chicken-UR10e-CustomGripper-GELLO-v0"
+GELLO_TASK_ID = "Isaac-Lift-Chicken-UR10e-CustomGripper-GELLO-v0"
+SPACEMOUSE_TASK_ID = "Isaac-Lift-Chicken-UR10e-CustomGripper-IK-Rel-v0"
+TASK_ID     = GELLO_TASK_ID if args_cli.teleop_device == "gello" else SPACEMOUSE_TASK_ID
 SIM_STEP_DT = 0.02     # decimation=2, dt=0.01
 GRIPPER_THRESH = 0.5   # GELLO gripper fraction below this → open command
 ARM_IDLE_DEADBAND_RAD = 0.01  # Ignore tiny idle encoder changes when GELLO is not being moved.
@@ -190,6 +208,10 @@ GRIPPER_Z_LIMIT_WARN_INTERVAL = 50
 CHICKEN_SETTLE_STEPS = 120
 TABLE_TOP_HALF_X = 0.254
 TABLE_TOP_HALF_Y = 0.3048
+CAM_H = 480
+CAM_W = 640
+SIDE_CAM_H = 360
+SIDE_CAM_W = 480
 
 _PLACEMENT_SCAN_CURSOR = 0
 
@@ -582,10 +604,16 @@ def place_chicken_on_table(env_uw, rng: np.random.Generator, reason: str) -> tup
     return pos, quat
 
 
+def make_hold_action(arm_joints: np.ndarray, gripper_bin: float = 1.0) -> np.ndarray:
+    if args_cli.teleop_device == "spacemouse":
+        return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, gripper_bin, gripper_bin], dtype=np.float32)
+    return np.array([*arm_joints, gripper_bin, gripper_bin], dtype=np.float32)
+
+
 def hold_arm_step(env, env_uw, arm_joints: np.ndarray) -> None:
     env.step(
         torch.tensor(
-            np.array([*arm_joints, 1.0, 1.0], dtype=np.float32),
+            make_hold_action(arm_joints, 1.0),
             device=env_uw.device,
         ).unsqueeze(0)
     )
@@ -643,6 +671,8 @@ def recover_chicken_if_dropped(env_uw, rng: np.random.Generator) -> bool:
 
 
 def sample_episode_arm_offset(rng: np.random.Generator) -> np.ndarray:
+    if args_cli.teleop_device != "gello":
+        return np.zeros(6, dtype=np.float32)
     ranges = np.deg2rad(np.array(args_cli.robot_start_noise_deg, dtype=np.float32))
     if np.max(np.abs(ranges)) <= 0.0:
         return np.zeros(6, dtype=np.float32)
@@ -655,12 +685,15 @@ def make_episode_quality_tracker(env_uw, episode_idx: int, arm_offset: np.ndarra
     robot_joints = get_sim_arm_joints(env_uw).astype(np.float32)
     return {
         "episode_idx": int(episode_idx),
+        "teleop_device": args_cli.teleop_device,
+        "task_id": TASK_ID,
         "started_wall_time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "chicken_start_pos": chicken_pos.astype(float).tolist(),
         "chicken_start_quat_wxyz": chicken_quat.astype(float).tolist(),
         "chicken_start_yaw_rad": _quat_wxyz_to_yaw(chicken_quat),
         "robot_start_joint": robot_joints.astype(float).tolist(),
         "episode_arm_offset": arm_offset.astype(float).tolist(),
+        "action_semantics": "ik_relative_eef_delta" if args_cli.teleop_device == "spacemouse" else "absolute_joint_targets",
         "first_gripper_close_step": None,
         "first_gripper_close_time_s": None,
         "max_chicken_height": float(chicken_pos[2]),
@@ -909,6 +942,126 @@ def make_runtime_chicken_rigid_object_cfg(chicken_cfg) -> RigidObjectCfg:
     )
 
 
+def _table_camera_cfg(name: str, pos: tuple[float, float, float], rot: tuple[float, float, float, float]) -> CameraCfg:
+    return CameraCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/{name}",
+        update_period=0,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=18.0,
+            focus_distance=1.0,
+            horizontal_aperture=36.0,
+            clipping_range=(0.02, 10.0),
+        ),
+        width=SIDE_CAM_W,
+        height=SIDE_CAM_H,
+        offset=CameraCfg.OffsetCfg(pos=pos, rot=rot, convention="opengl"),
+    )
+
+
+def add_collection_cameras_to_env_cfg(env_cfg) -> None:
+    """Add the same wrist/side RGB cameras used by the GELLO collection task."""
+
+    if not hasattr(env_cfg.scene, "camera") or env_cfg.scene.camera is None:
+        env_cfg.scene.camera = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/ur10e/wrist_3_link/realsense",
+            update_period=0,
+            data_types=["rgb"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=24.0,
+                focus_distance=400.0,
+                horizontal_aperture=40.0,
+                clipping_range=(0.02, 10.0),
+            ),
+            width=CAM_W,
+            height=CAM_H,
+            offset=CameraCfg.OffsetCfg(
+                pos=(0.0, -0.1, 0.1),
+                rot=(0.0, 0.0, 0.462, 0.8875),
+                convention="ros",
+            ),
+        )
+
+    if not hasattr(env_cfg.scene, "left_camera") or env_cfg.scene.left_camera is None:
+        env_cfg.scene.left_camera = _table_camera_cfg(
+            "left_table_camera",
+            pos=(-0.6, 0.5, 0.7),
+            rot=(0.0, 0.0, 0.656059, 0.754710),
+        )
+
+    if not hasattr(env_cfg.scene, "right_camera") or env_cfg.scene.right_camera is None:
+        env_cfg.scene.right_camera = _table_camera_cfg(
+            "right_table_camera",
+            pos=(0.0, -0.5, 1.4),
+            rot=(0.776096, 0.498735, 0.175892, 0.343512),
+        )
+
+
+def disable_non_collection_chicken_terms(env_cfg) -> None:
+    """Disable old RL terms that expect the previous articulated chicken bodies."""
+
+    policy_obs = getattr(getattr(env_cfg, "observations", None), "policy", None)
+    for name in (
+        "object_position",
+        "chicken_legs",
+        "chicken_orient",
+        "chicken_vel",
+        "target_object_position",
+    ):
+        if policy_obs is not None and hasattr(policy_obs, name):
+            setattr(policy_obs, name, None)
+
+    for group_name in ("rewards", "curriculum"):
+        group = getattr(env_cfg, group_name, None)
+        fields = getattr(group, "__dataclass_fields__", {}) if group is not None else {}
+        for name in fields:
+            setattr(group, name, None)
+
+    terms = getattr(env_cfg, "terminations", None)
+    fields = getattr(terms, "__dataclass_fields__", {}) if terms is not None else {}
+    for name in fields:
+        if name != "time_out":
+            setattr(terms, name, None)
+
+    commands = getattr(env_cfg, "commands", None)
+    if commands is not None and hasattr(commands, "object_pose"):
+        commands.object_pose = None
+
+    events = getattr(env_cfg, "events", None)
+    for name in ("reset_chicken_position", "randomise_chicken_joints", "start_chicken_skin_driver"):
+        if events is not None and hasattr(events, name):
+            setattr(events, name, None)
+
+
+def apply_collection_robot_home_pose(env_cfg) -> None:
+    """Use a device-appropriate robot reset pose for collection."""
+
+    if args_cli.teleop_device == "spacemouse":
+        arm_home = np.deg2rad(np.array(args_cli.spacemouse_home_joints_deg, dtype=np.float32))
+    else:
+        arm_home = np.array(
+            [-0.205, -1.852, -1.582, -1.417, 1.612, 0.200],
+            dtype=np.float32,
+        )
+
+    env_cfg.scene.robot.init_state = ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, ROBOT_BASE_Z),
+        rot=(1.0, 0.0, 0.0, 0.0),
+        joint_pos={
+            "shoulder_pan_joint": float(arm_home[0]),
+            "shoulder_lift_joint": float(arm_home[1]),
+            "elbow_joint": float(arm_home[2]),
+            "wrist_1_joint": float(arm_home[3]),
+            "wrist_2_joint": float(arm_home[4]),
+            "wrist_3_joint": float(arm_home[5]),
+            "PrismaticJoint1": 0.0,
+            "PrismaticJoint2": 0.0,
+            "PrismaticJoint3": 0.0,
+            "PrismaticJoint4": 0.0,
+        },
+    )
+
+
 def draw_multi_camera_preview(
     frames: dict[str, np.ndarray],
     recording: bool,
@@ -1084,6 +1237,24 @@ def keep_tool_perpendicular_targets(target: np.ndarray, reference_joints: np.nda
     target[_WRIST_PITCH_ID] = reference_pitch_sum - target[_SHOULDER_LIFT_ID] - target[_ELBOW_ID]
     target[_WRIST_ROLL_ID] = reference_joints[_WRIST_ROLL_ID]
     return target
+
+
+def make_spacemouse_action(spacemouse: Se3SpaceMouse, flags: dict) -> np.ndarray:
+    """Return IK-relative action with explicit keyboard-controlled gripper."""
+
+    delta = spacemouse.advance().detach().cpu().numpy().astype(np.float32)
+    if delta.shape[0] > 6:
+        delta = delta[:6]
+    else:
+        delta = np.pad(delta, (0, max(0, 6 - delta.shape[0]))).astype(np.float32)
+
+    if not flags.get("spacemouse_z_enabled", False):
+        delta[2] = 0.0
+    if not flags.get("spacemouse_rot_enabled", False):
+        delta[3:6] = 0.0
+
+    gripper_bin = -1.0 if flags.get("gripper_closed", False) else 1.0
+    return np.array([*delta[:6], gripper_bin, gripper_bin], dtype=np.float32)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1456,32 +1627,79 @@ class ZarrDemoWriter:
 
 def main():
     env_cfg = parse_env_cfg(TASK_ID, device=args_cli.device, num_envs=1, use_fabric=True)
+    disable_non_collection_chicken_terms(env_cfg)
+    apply_collection_robot_home_pose(env_cfg)
+    add_collection_cameras_to_env_cfg(env_cfg)
     env_cfg.scene.chicken = make_runtime_chicken_rigid_object_cfg(env_cfg.scene.chicken)
     env_cfg.episode_length_s = 10000.0
     env    = gym.make(TASK_ID, cfg=env_cfg)
     env_uw = env.unwrapped
     rng = np.random.default_rng(args_cli.chicken_seed)
 
-    gello_port = args_cli.gello_port or _find_gello_port()
-    gello = GelloReader(port=gello_port, calib_path=args_cli.calib_path)
+    gello = None
+    spacemouse = None
+    if args_cli.teleop_device == "gello":
+        gello_port = args_cli.gello_port or _find_gello_port()
+        gello = GelloReader(port=gello_port, calib_path=args_cli.calib_path)
+    else:
+        spacemouse = Se3SpaceMouse(
+            Se3SpaceMouseCfg(
+                gripper_term=False,
+                pos_sensitivity=float(args_cli.spacemouse_pos_sensitivity),
+                rot_sensitivity=float(args_cli.spacemouse_rot_sensitivity),
+                sim_device=args_cli.device,
+            )
+        )
+        print(spacemouse)
 
     if args_cli.diagnose:
+        if gello is None:
+            raise RuntimeError("--diagnose is only available with --teleop_device gello.")
         run_diagnose_loop(env, env_uw, gello)
         env.close()
         return
 
     # ── keyboard ──────────────────────────────────────────────────────────────
     kb    = SimpleKeyboard()
-    flags = {"recording": False, "save": False, "discard": False, "quit": False, "human_clean": None}
+    flags = {
+        "recording": False,
+        "save": False,
+        "discard": False,
+        "quit": False,
+        "human_clean": None,
+        "gripper_closed": False,
+        "spacemouse_z_enabled": False,
+        "spacemouse_rot_enabled": False,
+    }
     kb.add_callback("C",         lambda: (flags.update({"recording": True})
                                           or print("\n[REC] Recording — S to save, Backspace to discard")))
     kb.add_callback("S",         lambda: flags.update({"save": True}))
     kb.add_callback("BACKSPACE", lambda: flags.update({"discard": True}))
     kb.add_callback("Q",         lambda: flags.update({"quit": True}))
+    kb.add_callback("G",         lambda: (flags.update({"gripper_closed": not flags["gripper_closed"]})
+                                          or print(
+                                              "[gripper] "
+                                              f"{'closed' if flags['gripper_closed'] else 'open'}"
+                                          )))
     kb.add_callback("Y",         lambda: (flags.update({"human_clean": True})
                                           or print("[quality] Marked current episode clean.")))
     kb.add_callback("N",         lambda: (flags.update({"human_clean": False})
                                           or print("[quality] Marked current episode not clean.")))
+    if spacemouse is not None:
+        spacemouse.add_callback(
+            "L",
+            lambda: (
+                flags.update({"spacemouse_z_enabled": not flags["spacemouse_z_enabled"]})
+                or print(f"[SpaceMouse] Z motion {'enabled' if flags['spacemouse_z_enabled'] else 'disabled'}")
+            ),
+        )
+        spacemouse.add_callback(
+            "R",
+            lambda: (
+                flags.update({"spacemouse_rot_enabled": not flags["spacemouse_rot_enabled"]})
+                or print(f"[SpaceMouse] rotation {'enabled' if flags['spacemouse_rot_enabled'] else 'disabled'}")
+            ),
+        )
 
     # ── writer ────────────────────────────────────────────────────────────────
     writer = ZarrDemoWriter(
@@ -1514,7 +1732,13 @@ def main():
         f"z={chicken_placement_z():.4f}m, "
         "yaw=0.0deg"
     )
-    print("Controls: C=record  S=save  Backspace=discard  Q=quit\n")
+    if args_cli.teleop_device == "spacemouse":
+        print(
+            "Controls: C=record  S=save  Backspace=discard  Q=quit  "
+            "G=toggle gripper  SpaceMouse L=toggle Z  R=toggle rotation\n"
+        )
+    else:
+        print("Controls: C=record  S=save  Backspace=discard  Q=quit\n")
 
     # ── startup: drive robot toward GELLO's current pose through articulation drives ──
     env.reset()
@@ -1538,22 +1762,28 @@ def main():
             f"max_above_table={args_cli.max_gripper_height_above_table:.3f} m, "
             f"limit_z={gripper_z_limit_w:.4f} m."
         )
-    print(
-        "[GELLO] Keeping gripper pitch/roll near reset pose: "
-        f"wrist_2_joint={last_arm_joints[_WRIST_ROLL_ID]:+.3f} rad fixed, "
-        "wrist_1_joint compensates shoulder/elbow, wrist_3_joint remains active for yaw."
-    )
-    gello_start = keep_tool_perpendicular_targets(
-        snap_to_gello(env_uw, gello) + episode_arm_offset,
-        perpendicular_reference_joints,
-    )
-    for _ in range(120):
-        last_arm_joints = rate_limit_arm_targets(last_arm_joints, gello_start, MAX_ARM_TARGET_STEP_RAD)
-        env.step(torch.tensor(np.array([*last_arm_joints, 1.0, 1.0], dtype=np.float32),
-                              device=env_uw.device).unsqueeze(0))
+    if args_cli.teleop_device == "gello":
+        print(
+            "[GELLO] Keeping gripper pitch/roll near reset pose: "
+            f"wrist_2_joint={last_arm_joints[_WRIST_ROLL_ID]:+.3f} rad fixed, "
+            "wrist_1_joint compensates shoulder/elbow, wrist_3_joint remains active for yaw."
+        )
+        gello_start = keep_tool_perpendicular_targets(
+            snap_to_gello(env_uw, gello) + episode_arm_offset,
+            perpendicular_reference_joints,
+        )
+        for _ in range(120):
+            last_arm_joints = rate_limit_arm_targets(last_arm_joints, gello_start, MAX_ARM_TARGET_STEP_RAD)
+            hold_arm_step(env, env_uw, last_arm_joints)
+    else:
+        print(
+            "[SpaceMouse] Ready. Move puck for XY. Press left button to toggle Z motion, "
+            "right button to toggle rotation, and G to toggle the gripper."
+        )
+        print(f"[SpaceMouse] Home joints deg: {np.array(args_cli.spacemouse_home_joints_deg, dtype=np.float32)}")
     rb_pos_z = env_uw.scene["robot"].data.root_pos_w[0, 2].item()  # type: ignore[union-attr]
     print(f"[DEBUG] Robot base Z after snap  = {rb_pos_z:.4f}  (expected 0.63)")
-    print("[GELLO] Ready. Press C to start recording.")
+    print(f"[{args_cli.teleop_device.upper()}] Ready. Press C to start recording.")
 
     # ── main loop ─────────────────────────────────────────────────────────────
     demos_saved  = writer.n_episodes
@@ -1570,31 +1800,35 @@ def main():
             print(f"\nTarget of {args_cli.num_demos} demos reached. Exiting.")
             break
 
-        # ── GELLO read ────────────────────────────────────────────────────────
-        gello_state  = gello.get_joints()
-        arm_joints   = gello_state[:6].astype(np.float32) * GELLO_SIGNS + GELLO_OFFSETS + episode_arm_offset
-        arm_joints   = keep_tool_perpendicular_targets(arm_joints, perpendicular_reference_joints)
-        if gripper_z_limit_w is not None:
-            gripper_z_w = get_gripper_tip_z_w(env_uw)
-            arm_joints, z_limited = clamp_arm_target_to_gripper_z_limit(
-                env_uw, last_arm_joints, arm_joints, gripper_z_limit_w
-            )
-            if z_limited:
-                if loop_step - z_limit_warn_step >= GRIPPER_Z_LIMIT_WARN_INTERVAL:
-                    print(
-                        "[LIMIT] Gripper tip reached Z clamp "
-                        f"({gripper_z_w:.3f} m > {gripper_z_limit_w:.3f} m). "
-                        "Removing upward motion; downward/sideways/yaw commands remain active."
-                    )
-                    z_limit_warn_step = loop_step
-        if np.max(np.abs(arm_joints - last_arm_joints)) < ARM_IDLE_DEADBAND_RAD:
-            arm_joints = last_arm_joints.copy()
+        # ── teleop read ───────────────────────────────────────────────────────
+        if args_cli.teleop_device == "spacemouse":
+            action_np = make_spacemouse_action(spacemouse, flags)
+            last_arm_joints = get_sim_arm_joints(env_uw).astype(np.float32)
         else:
-            arm_joints = rate_limit_arm_targets(last_arm_joints, arm_joints, MAX_ARM_TARGET_STEP_RAD)
-            last_arm_joints = arm_joints.copy()
-        gripper_frac = float(gello_state[6])
-        gripper_bin  = 1.0 if gripper_frac < GRIPPER_THRESH else -1.0
-        action_np    = np.array([*arm_joints, gripper_bin, gripper_bin], dtype=np.float32)
+            gello_state  = gello.get_joints()
+            arm_joints   = gello_state[:6].astype(np.float32) * GELLO_SIGNS + GELLO_OFFSETS + episode_arm_offset
+            arm_joints   = keep_tool_perpendicular_targets(arm_joints, perpendicular_reference_joints)
+            if gripper_z_limit_w is not None:
+                gripper_z_w = get_gripper_tip_z_w(env_uw)
+                arm_joints, z_limited = clamp_arm_target_to_gripper_z_limit(
+                    env_uw, last_arm_joints, arm_joints, gripper_z_limit_w
+                )
+                if z_limited:
+                    if loop_step - z_limit_warn_step >= GRIPPER_Z_LIMIT_WARN_INTERVAL:
+                        print(
+                            "[LIMIT] Gripper tip reached Z clamp "
+                            f"({gripper_z_w:.3f} m > {gripper_z_limit_w:.3f} m). "
+                            "Removing upward motion; downward/sideways/yaw commands remain active."
+                        )
+                        z_limit_warn_step = loop_step
+            if np.max(np.abs(arm_joints - last_arm_joints)) < ARM_IDLE_DEADBAND_RAD:
+                arm_joints = last_arm_joints.copy()
+            else:
+                arm_joints = rate_limit_arm_targets(last_arm_joints, arm_joints, MAX_ARM_TARGET_STEP_RAD)
+                last_arm_joints = arm_joints.copy()
+            gripper_frac = float(gello_state[6])
+            gripper_bin  = 1.0 if gripper_frac < GRIPPER_THRESH else -1.0
+            action_np    = np.array([*arm_joints, gripper_bin, gripper_bin], dtype=np.float32)
 
         # ── observe + optional camera (before step) ──────────────────────────
         obs_dict  = extract_obs_dict(env_uw)
@@ -1788,6 +2022,9 @@ def _reset_env(
     current = keep_tool_perpendicular_targets(current, perpendicular_reference_joints)
     chicken_target_pos, chicken_target_quat = place_chicken_on_table(env_uw, rng, reason="episode reset")
     settle_chicken_reset_pose(env, env_uw, current, chicken_target_pos, chicken_target_quat)
+    if args_cli.teleop_device == "spacemouse":
+        return get_sim_arm_joints(env_uw).astype(np.float32)
+
     g = keep_tool_perpendicular_targets(
         snap_to_gello(env_uw, gello) + episode_arm_offset,
         perpendicular_reference_joints,
