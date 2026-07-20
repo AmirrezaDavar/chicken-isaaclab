@@ -26,8 +26,8 @@ Saves episodes in diffusion-policy zarr format:
 Controls:
   GELLO handle   → arm joint positions
   GELLO trigger  → all 4 gripper jaws
-  SpaceMouse     → Cartesian XY motion; left button toggles Z motion;
-                   right button toggles rotation
+  SpaceMouse     → Cartesian XY motion; hold left button for Z motion;
+                   hold right button for yaw
   G              → toggle gripper open/closed in SpaceMouse mode
   C              → START recording
   S              → STOP + SAVE (writes zarr arrays + mp4)
@@ -124,6 +124,10 @@ parser.add_argument("--spacemouse_home_joints_deg", type=float, nargs=6,
                     default=(0.0, -100, -100, -70, 90.0, 0.0),
                     metavar=("PAN", "SHOULDER", "ELBOW", "WRIST1", "WRIST2", "WRIST3"),
                     help="SpaceMouse reset/home arm joints in degrees.")
+parser.add_argument("--spacemouse_orientation_lock_gain", type=float, default=0.8,
+                    help="Correction gain that keeps the SpaceMouse gripper orientation fixed/perpendicular.")
+parser.add_argument("--spacemouse_orientation_correction_limit", type=float, default=0.35,
+                    help="Max raw roll/pitch/yaw correction per SpaceMouse step in radians.")
 parser.add_argument("--auto_stop_on_lift", action=argparse.BooleanOptionalAction, default=True,
                     help="Automatically save when the chicken has been lifted and held above threshold.")
 parser.add_argument("--success_lift_height", type=float, default=0.0800,
@@ -179,7 +183,7 @@ from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg
     TABLE_CENTER_Y,
     TABLE_TOP_Z,
 )
-from isaaclab.utils.math import euler_xyz_from_quat
+from isaaclab.utils.math import compute_pose_error, euler_xyz_from_quat, quat_from_angle_axis, quat_mul
 
 try:
     import cv2
@@ -1179,6 +1183,14 @@ def get_sim_arm_joints(env_uw) -> np.ndarray:
     return robot.data.joint_pos[0, ids].cpu().numpy()
 
 
+def get_ik_tool_quat_w(env_uw) -> torch.Tensor:
+    """Return wrist_3_link orientation in the same frame used by the IK action."""
+
+    robot = env_uw.scene["robot"]
+    body_ids, _ = robot.find_bodies(["wrist_3_link"])
+    return robot.data.body_quat_w[0, body_ids[0]].detach().clone()
+
+
 def get_gripper_tip_z_w(env_uw) -> float:
     return float(env_uw.scene["ee_frame"].data.target_pos_w[0, 0, 2].item())
 
@@ -1239,7 +1251,39 @@ def keep_tool_perpendicular_targets(target: np.ndarray, reference_joints: np.nda
     return target
 
 
-def make_spacemouse_action(spacemouse: Se3SpaceMouse, flags: dict) -> np.ndarray:
+def update_target_quat_with_yaw(target_quat_w: torch.Tensor, raw_yaw_delta: float, device: str) -> torch.Tensor:
+    processed_yaw_delta = 0.2 * float(raw_yaw_delta)
+    if abs(processed_yaw_delta) < 1e-6:
+        return target_quat_w
+    axis = torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float32, device=device)
+    angle = torch.tensor([processed_yaw_delta], dtype=torch.float32, device=device)
+    yaw_quat = quat_from_angle_axis(angle, axis)
+    return quat_mul(yaw_quat, target_quat_w.unsqueeze(0))[0].detach()
+
+
+def orientation_lock_raw_command(env_uw, target_quat_w: torch.Tensor) -> np.ndarray:
+    current_quat = get_ik_tool_quat_w(env_uw).unsqueeze(0)
+    target_quat = target_quat_w.to(device=env_uw.device, dtype=torch.float32).unsqueeze(0)
+    zero_pos = torch.zeros((1, 3), dtype=torch.float32, device=env_uw.device)
+    _, axis_angle_error = compute_pose_error(
+        zero_pos,
+        current_quat,
+        zero_pos,
+        target_quat,
+        rot_error_type="axis_angle",
+    )
+    raw = axis_angle_error[0].detach().cpu().numpy().astype(np.float32)
+    raw *= float(args_cli.spacemouse_orientation_lock_gain) / 0.2
+    limit = abs(float(args_cli.spacemouse_orientation_correction_limit))
+    return np.clip(raw, -limit, limit).astype(np.float32)
+
+
+def make_spacemouse_action(
+    env_uw,
+    spacemouse: Se3SpaceMouse,
+    flags: dict,
+    target_quat_w: torch.Tensor,
+) -> tuple[np.ndarray, torch.Tensor]:
     """Return IK-relative action with explicit keyboard-controlled gripper."""
 
     delta = spacemouse.advance().detach().cpu().numpy().astype(np.float32)
@@ -1248,13 +1292,17 @@ def make_spacemouse_action(spacemouse: Se3SpaceMouse, flags: dict) -> np.ndarray
     else:
         delta = np.pad(delta, (0, max(0, 6 - delta.shape[0]))).astype(np.float32)
 
-    if not flags.get("spacemouse_z_enabled", False):
+    z_enabled = spacemouse.is_button_pressed("L")
+    rot_enabled = spacemouse.is_button_pressed("R")
+    if not z_enabled:
         delta[2] = 0.0
-    if not flags.get("spacemouse_rot_enabled", False):
-        delta[3:6] = 0.0
+    if rot_enabled:
+        target_quat_w = update_target_quat_with_yaw(target_quat_w, float(delta[5]), env_uw.device)
+
+    delta[3:6] = orientation_lock_raw_command(env_uw, target_quat_w)
 
     gripper_bin = -1.0 if flags.get("gripper_closed", False) else 1.0
-    return np.array([*delta[:6], gripper_bin, gripper_bin], dtype=np.float32)
+    return np.array([*delta[:6], gripper_bin, gripper_bin], dtype=np.float32), target_quat_w
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1645,6 +1693,7 @@ def main():
         spacemouse = Se3SpaceMouse(
             Se3SpaceMouseCfg(
                 gripper_term=False,
+                use_builtin_button_controls=False,
                 pos_sensitivity=float(args_cli.spacemouse_pos_sensitivity),
                 rot_sensitivity=float(args_cli.spacemouse_rot_sensitivity),
                 sim_device=args_cli.device,
@@ -1668,8 +1717,6 @@ def main():
         "quit": False,
         "human_clean": None,
         "gripper_closed": False,
-        "spacemouse_z_enabled": False,
-        "spacemouse_rot_enabled": False,
     }
     kb.add_callback("C",         lambda: (flags.update({"recording": True})
                                           or print("\n[REC] Recording — S to save, Backspace to discard")))
@@ -1685,22 +1732,6 @@ def main():
                                           or print("[quality] Marked current episode clean.")))
     kb.add_callback("N",         lambda: (flags.update({"human_clean": False})
                                           or print("[quality] Marked current episode not clean.")))
-    if spacemouse is not None:
-        spacemouse.add_callback(
-            "L",
-            lambda: (
-                flags.update({"spacemouse_z_enabled": not flags["spacemouse_z_enabled"]})
-                or print(f"[SpaceMouse] Z motion {'enabled' if flags['spacemouse_z_enabled'] else 'disabled'}")
-            ),
-        )
-        spacemouse.add_callback(
-            "R",
-            lambda: (
-                flags.update({"spacemouse_rot_enabled": not flags["spacemouse_rot_enabled"]})
-                or print(f"[SpaceMouse] rotation {'enabled' if flags['spacemouse_rot_enabled'] else 'disabled'}")
-            ),
-        )
-
     # ── writer ────────────────────────────────────────────────────────────────
     writer = ZarrDemoWriter(
         args_cli.out_dir,
@@ -1735,7 +1766,7 @@ def main():
     if args_cli.teleop_device == "spacemouse":
         print(
             "Controls: C=record  S=save  Backspace=discard  Q=quit  "
-            "G=toggle gripper  SpaceMouse L=toggle Z  R=toggle rotation\n"
+            "G=toggle gripper  SpaceMouse hold L=Z  hold R=yaw\n"
         )
     else:
         print("Controls: C=record  S=save  Backspace=discard  Q=quit\n")
@@ -1777,13 +1808,14 @@ def main():
             hold_arm_step(env, env_uw, last_arm_joints)
     else:
         print(
-            "[SpaceMouse] Ready. Move puck for XY. Press left button to toggle Z motion, "
-            "right button to toggle rotation, and G to toggle the gripper."
+            "[SpaceMouse] Ready. Move puck for XY. Hold left button for Z motion, "
+            "hold right button for yaw, and press G to toggle the gripper."
         )
         print(f"[SpaceMouse] Home joints deg: {np.array(args_cli.spacemouse_home_joints_deg, dtype=np.float32)}")
     rb_pos_z = env_uw.scene["robot"].data.root_pos_w[0, 2].item()  # type: ignore[union-attr]
     print(f"[DEBUG] Robot base Z after snap  = {rb_pos_z:.4f}  (expected 0.63)")
     print(f"[{args_cli.teleop_device.upper()}] Ready. Press C to start recording.")
+    spacemouse_target_quat_w = get_ik_tool_quat_w(env_uw) if spacemouse is not None else None
 
     # ── main loop ─────────────────────────────────────────────────────────────
     demos_saved  = writer.n_episodes
@@ -1802,7 +1834,12 @@ def main():
 
         # ── teleop read ───────────────────────────────────────────────────────
         if args_cli.teleop_device == "spacemouse":
-            action_np = make_spacemouse_action(spacemouse, flags)
+            action_np, spacemouse_target_quat_w = make_spacemouse_action(
+                env_uw,
+                spacemouse,
+                flags,
+                spacemouse_target_quat_w,
+            )
             last_arm_joints = get_sim_arm_joints(env_uw).astype(np.float32)
         else:
             gello_state  = gello.get_joints()
@@ -1954,6 +1991,8 @@ def main():
             last_arm_joints = _reset_env(
                 env, env_uw, gello, rng, perpendicular_reference_joints, episode_arm_offset
             ).astype(np.float32).copy()
+            if spacemouse is not None:
+                spacemouse_target_quat_w = get_ik_tool_quat_w(env_uw)
             print(f"  → {demos_saved} episodes saved. Press C for next.\n")
 
         # ── discard ───────────────────────────────────────────────────────────
@@ -1968,6 +2007,8 @@ def main():
             last_arm_joints = _reset_env(
                 env, env_uw, gello, rng, perpendicular_reference_joints, episode_arm_offset
             ).astype(np.float32).copy()
+            if spacemouse is not None:
+                spacemouse_target_quat_w = get_ik_tool_quat_w(env_uw)
             print("  → Discarded. Press C for a new episode.\n")
 
         # ── auto-reset on env termination ─────────────────────────────────────
@@ -1992,6 +2033,8 @@ def main():
             last_arm_joints = _reset_env(
                 env, env_uw, gello, rng, perpendicular_reference_joints, episode_arm_offset
             ).astype(np.float32).copy()
+            if spacemouse is not None:
+                spacemouse_target_quat_w = get_ik_tool_quat_w(env_uw)
 
         loop_step += 1
 

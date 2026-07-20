@@ -53,6 +53,7 @@ class Se3SpaceMouse(DeviceBase):
         self.pos_sensitivity = cfg.pos_sensitivity
         self.rot_sensitivity = cfg.rot_sensitivity
         self.gripper_term = cfg.gripper_term
+        self.use_builtin_button_controls = cfg.use_builtin_button_controls
         self._sim_device = cfg.sim_device
         # acquire device interface
         self._device = hid.device()
@@ -64,6 +65,7 @@ class Se3SpaceMouse(DeviceBase):
         self._close_gripper = False
         self._delta_pos = np.zeros(3)  # (x, y, z)
         self._delta_rot = np.zeros(3)  # (roll, pitch, yaw)
+        self._button_state = 0
         # dictionary for additional callbacks
         self._additional_callbacks = dict()
         # run a thread for listening to device updates
@@ -97,6 +99,7 @@ class Se3SpaceMouse(DeviceBase):
         self._close_gripper = False
         self._delta_pos = np.zeros(3)  # (x, y, z)
         self._delta_rot = np.zeros(3)  # (roll, pitch, yaw)
+        self._button_state = 0
 
     def add_callback(self, key: str, func: Callable):
         """Add additional functions to bind spacemouse.
@@ -107,6 +110,16 @@ class Se3SpaceMouse(DeviceBase):
                 take any arguments.
         """
         self._additional_callbacks[key] = func
+
+    def is_button_pressed(self, key: str) -> bool:
+        """Return whether a SpaceMouse side button is currently held."""
+
+        key = key.upper()
+        if key == "L":
+            return self._button_state in (1, 3)
+        if key == "R":
+            return self._button_state in (2, 3)
+        raise ValueError(f"Unsupported SpaceMouse button key: {key}")
 
     def advance(self) -> torch.Tensor:
         """Provides the result from spacemouse event state.
@@ -187,21 +200,21 @@ class Se3SpaceMouse(DeviceBase):
                         self._delta_rot[2] = self.rot_sensitivity * convert_buffer(data[5], data[6]) * -1.0
                 # readings from the side buttons
                 if data[0] == 3:
+                    previous_button_state = self._button_state
+                    self._button_state = int(data[1])
                     # press left button
-                    if data[1] == 1:
+                    if self.use_builtin_button_controls and data[1] == 1 and previous_button_state != 1:
                         # close gripper
                         self._close_gripper = not self._close_gripper
-                        # additional callbacks
-                        if "L" in self._additional_callbacks:
-                            self._additional_callbacks["L"]()
+                    if data[1] == 1 and previous_button_state != 1 and "L" in self._additional_callbacks:
+                        self._additional_callbacks["L"]()
                     # right button is for reset
-                    if data[1] == 2:
+                    if self.use_builtin_button_controls and data[1] == 2 and previous_button_state != 2:
                         # reset layer
                         self.reset()
-                        # additional callbacks
-                        if "R" in self._additional_callbacks:
-                            self._additional_callbacks["R"]()
-                    if data[1] == 3:
+                    if data[1] == 2 and previous_button_state != 2 and "R" in self._additional_callbacks:
+                        self._additional_callbacks["R"]()
+                    if self.use_builtin_button_controls and data[1] == 3 and previous_button_state != 3:
                         self._read_rotation = not self._read_rotation
 
 
@@ -210,6 +223,7 @@ class Se3SpaceMouseCfg(DeviceCfg):
     """Configuration for SE3 space mouse devices."""
 
     gripper_term: bool = True
+    use_builtin_button_controls: bool = True
     pos_sensitivity: float = 0.4
     rot_sensitivity: float = 0.8
     retargeters: None = None
