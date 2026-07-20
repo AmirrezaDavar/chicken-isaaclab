@@ -14,10 +14,6 @@ import argparse
 import sys
 import numpy as np
 import zarr
-import matplotlib
-matplotlib.use("TkAgg")          # change to "Agg" if no display → saves PNG instead
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
@@ -28,6 +24,11 @@ parser.add_argument("--episode",   type=int, default=None,
 parser.add_argument("--save",      type=str, default=None,
                     help="Save figure to this PNG path instead of showing interactively.")
 args = parser.parse_args()
+
+import matplotlib
+matplotlib.use("Agg" if args.save else "TkAgg")
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 
 # ── Load zarr ─────────────────────────────────────────────────────────────────
 store = zarr.DirectoryStore(args.zarr_path)

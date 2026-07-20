@@ -43,6 +43,7 @@ import os
 import queue
 import threading
 import traceback
+import time
 
 GELLO_SOFTWARE_DIR = (
     "/home/wanglab22/1_gello_software"
@@ -86,11 +87,32 @@ parser.add_argument("--preview_width", type=int, default=1280,
                     help="Initial live camera popup width in pixels.")
 parser.add_argument("--preview_height", type=int, default=720,
                     help="Initial live camera popup height in pixels.")
-parser.add_argument("--chicken_xy_range", type=float, nargs=2, default=(0.0, 0.0),
+parser.add_argument("--chicken_xy_range", type=float, nargs=2, default=(0.08, 0.08),
                     metavar=("X_RANGE", "Y_RANGE"),
                     help="Random chicken XY half-ranges in meters after each episode.")
+parser.add_argument("--chicken_yaw_range_deg", type=float, default=0.0,
+                    help="Random chicken yaw half-range in degrees after each episode.")
 parser.add_argument("--chicken_seed", type=int, default=None,
                     help="Random seed for chicken XY placement.")
+parser.add_argument("--robot_start_noise_deg", type=float, nargs=6,
+                    default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                    metavar=("J1", "J2", "J3", "J4", "J5", "J6"),
+                    help="Per-episode GELLO-to-sim joint offset half-ranges in degrees.")
+parser.add_argument("--auto_stop_on_lift", action="store_true",
+                    help="Automatically save when the chicken has been lifted and held above threshold.")
+parser.add_argument("--success_lift_height", type=float, default=0.04,
+                    help="Chicken root height increase in meters required for a successful lift.")
+parser.add_argument("--auto_stop_hold_steps", type=int, default=10,
+                    help="Consecutive lifted recording steps required before auto-save.")
+parser.add_argument("--no_contact_sheets", action="store_true",
+                    help="Disable per-episode JPG review contact sheets.")
+parser.add_argument("--contact_sheet_stride", type=int, default=15,
+                    help="Keep one review frame every N recorded steps for contact sheets.")
+parser.add_argument("--coverage_footprint_size", type=float, nargs=2, default=(0.30, 0.12),
+                    metavar=("LENGTH", "WIDTH"),
+                    help="Approx chicken footprint size in meters for top-down coverage preview.")
+parser.add_argument("--coverage_map_half_range", type=float, default=0.18,
+                    help="Top-down coverage map XY half-range around table center in meters.")
 parser.add_argument("--disable_chicken_drop_reset", action="store_true",
                     help="Do not automatically bring the chicken back if it drops below the table.")
 parser.add_argument("--max_gripper_height_above_table", type=float, default=0.10,
@@ -108,13 +130,14 @@ import numpy as np
 import torch
 import zarr
 import gymnasium as gym
-from pxr import Usd, UsdGeom
+from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
 import carb.input
 import omni.appwindow
 
 import isaaclab.sim as sim_utils
 import isaaclab_tasks  # noqa: F401
+from isaaclab.assets import RigidObjectCfg
 from isaaclab_tasks.utils import parse_env_cfg
 from isaaclab_tasks.manager_based.manipulation.chicken_lift.chicken_lift_env_cfg import (
     CHICKEN_DROP_MIN_HEIGHT,
@@ -245,6 +268,25 @@ def _quat_to_euler(q: np.ndarray) -> np.ndarray:
     return np.array([r.item(), p.item(), y.item()], dtype=np.float32)
 
 
+def _quat_wxyz_to_yaw(q: np.ndarray) -> float:
+    w, x, y, z = [float(v) for v in q]
+    return float(np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
+
+
+def _quat_multiply_wxyz(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    aw, ax, ay, az = [float(v) for v in a]
+    bw, bx, by, bz = [float(v) for v in b]
+    return np.array(
+        [
+            aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+        ],
+        dtype=np.float32,
+    )
+
+
 def extract_obs_dict(env_uw) -> dict:
     """Extract per-feature observation dict matching the zarr array layout."""
     scene = env_uw.scene
@@ -274,9 +316,7 @@ def extract_obs_dict(env_uw) -> dict:
     lj_frac = float(np.clip(robot.data.joint_pos[0, lj_ids].cpu().numpy() / -0.0093, 0.0, 1.0).mean())
     rj_frac = float(np.clip(robot.data.joint_pos[0, rj_ids].cpu().numpy() / -0.0093, 0.0, 1.0).mean())
 
-    # The final chicken USD is spawned as a plain scene asset for GELLO teleop,
-    # so it is not queried through an articulation/rigid-object data handle.
-    ck_z_r = float(CHICKEN_SPAWN_Z - rb_pos[2])
+    ck_z_r = float(get_chicken_root_pos_w(env_uw)[2] - rb_pos[2])
 
     return {
         "robot_joint":        robot_joint,
@@ -322,6 +362,34 @@ def _find_chicken_prim() -> Usd.Prim:
     raise RuntimeError("Could not find a USD prim ending in /Chicken.")
 
 
+def _find_chicken_rigid_prim() -> Usd.Prim:
+    root = _find_chicken_prim()
+    if root.HasAPI(UsdPhysics.RigidBodyAPI):
+        return root
+    for prim in Usd.PrimRange(root):
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            return prim
+    return root
+
+
+def _world_pose_to_parent_local(prim: Usd.Prim, pos_w: np.ndarray, quat_w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    parent = prim.GetParent()
+    if not parent.IsValid():
+        return pos_w.astype(np.float32), quat_w.astype(np.float32)
+
+    parent_tf = UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    parent_inv = parent_tf.GetInverse()
+    world_tf = Gf.Matrix4d()
+    world_tf.SetRotate(Gf.Quatd(float(quat_w[0]), float(quat_w[1]), float(quat_w[2]), float(quat_w[3])))
+    world_tf.SetTranslateOnly(Gf.Vec3d(float(pos_w[0]), float(pos_w[1]), float(pos_w[2])))
+    local_tf = world_tf * parent_inv
+    local_pos = np.array(local_tf.ExtractTranslation(), dtype=np.float32)
+    local_quat = local_tf.ExtractRotationQuat()
+    local_imag = local_quat.GetImaginary()
+    local_rot = np.array([local_quat.GetReal(), local_imag[0], local_imag[1], local_imag[2]], dtype=np.float32)
+    return local_pos, local_rot
+
+
 def force_chicken_visuals_visible(root_prim: Usd.Prim) -> None:
     for prim in Usd.PrimRange(root_prim):
         if prim.IsA(UsdGeom.Imageable):
@@ -337,10 +405,27 @@ def get_chicken_root_pos_w(env_uw) -> np.ndarray:
     except Exception:
         pass
 
-    prim = _find_chicken_prim()
+    prim = _find_chicken_rigid_prim()
     xform = UsdGeom.Xformable(prim)
     world_tf = xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
     return np.array(world_tf.ExtractTranslation(), dtype=np.float32)
+
+
+def get_chicken_root_quat_w(env_uw) -> np.ndarray:
+    """Return chicken root orientation as (w, x, y, z)."""
+    try:
+        chicken = env_uw.scene["chicken"]
+        if hasattr(chicken, "data") and hasattr(chicken.data, "root_quat_w"):
+            return chicken.data.root_quat_w[0].detach().cpu().numpy().astype(np.float32)
+    except Exception:
+        pass
+
+    prim = _find_chicken_rigid_prim()
+    xform = UsdGeom.Xformable(prim)
+    world_tf = xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    quat = world_tf.ExtractRotationQuat()
+    imag = quat.GetImaginary()
+    return np.array([quat.GetReal(), imag[0], imag[1], imag[2]], dtype=np.float32)
 
 
 def random_chicken_xy(rng: np.random.Generator) -> tuple[float, float]:
@@ -352,6 +437,8 @@ def random_chicken_xy(rng: np.random.Generator) -> tuple[float, float]:
 
 def random_chicken_pose(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     x, y = random_chicken_xy(rng)
+    yaw = np.deg2rad(float(rng.uniform(-abs(args_cli.chicken_yaw_range_deg), abs(args_cli.chicken_yaw_range_deg))))
+    yaw_quat = np.array([np.cos(0.5 * yaw), 0.0, 0.0, np.sin(0.5 * yaw)], dtype=np.float32)
     pos = np.array(
         [
             x,
@@ -360,46 +447,55 @@ def random_chicken_pose(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarra
         ],
         dtype=np.float32,
     )
-    return pos, CHICKEN_SPAWN_ROT.copy()
+    return pos, _quat_multiply_wxyz(yaw_quat, CHICKEN_SPAWN_ROT)
 
 
 def write_chicken_pose_to_sim(env_uw, pos: np.ndarray, quat: np.ndarray) -> bool:
     try:
         chicken = env_uw.scene["chicken"]
         root_pose = torch.tensor([*pos, *quat], dtype=torch.float32, device=env_uw.device).unsqueeze(0)
-        if hasattr(chicken, "write_root_pose_to_sim"):
+        root_vel = torch.zeros((1, 6), dtype=torch.float32, device=env_uw.device)
+        if hasattr(chicken, "write_root_state_to_sim"):
+            chicken.write_root_state_to_sim(torch.cat([root_pose, root_vel], dim=1))
+        elif hasattr(chicken, "write_root_pose_to_sim"):
             chicken.write_root_pose_to_sim(root_pose)
+            if hasattr(chicken, "write_root_velocity_to_sim"):
+                chicken.write_root_velocity_to_sim(root_vel)
         else:
             return False
-        if hasattr(chicken, "write_root_velocity_to_sim"):
-            root_vel = torch.zeros((1, 6), dtype=torch.float32, device=env_uw.device)
-            chicken.write_root_velocity_to_sim(root_vel)
-        if hasattr(chicken, "reset"):
-            chicken.reset()
         return True
     except Exception as exc:
         print(f"[chicken] warning: could not move chicken through asset API: {exc}")
         return False
 
 
+def write_chicken_pose_to_usd(pos: np.ndarray, quat: np.ndarray) -> None:
+    root_prim = _find_chicken_prim()
+    rigid_prim = _find_chicken_rigid_prim()
+    local_pos, local_quat = _world_pose_to_parent_local(rigid_prim, pos, quat)
+    sim_utils.standardize_xform_ops(
+        rigid_prim,
+        translation=tuple(float(v) for v in local_pos),
+        orientation=tuple(float(v) for v in local_quat),
+    )
+    force_chicken_visuals_visible(root_prim)
+
+
 def place_chicken_on_table(env_uw, rng: np.random.Generator, reason: str) -> np.ndarray:
     """Place the chicken on/above the table."""
 
-    prim = _find_chicken_prim()
     pos, quat = random_chicken_pose(rng)
     moved_with_asset_api = write_chicken_pose_to_sim(env_uw, pos, quat)
     if not moved_with_asset_api:
-        sim_utils.standardize_xform_ops(
-            prim,
-            translation=tuple(float(v) for v in pos),
-            orientation=tuple(float(v) for v in quat),
-        )
-    force_chicken_visuals_visible(prim)
+        write_chicken_pose_to_usd(pos, quat)
 
     actual_pos = get_chicken_root_pos_w(env_uw)
+    actual_quat = get_chicken_root_quat_w(env_uw)
     print(
         f"[chicken] {reason}: "
         f"x={actual_pos[0]:+.3f}, y={actual_pos[1]:+.3f}, z={actual_pos[2]:+.3f} "
+        f"yaw={np.rad2deg(_quat_wxyz_to_yaw(actual_quat)):+.1f} deg "
+        f"target=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f}) "
         f"(asset api={'yes' if moved_with_asset_api else 'no'})"
     )
     return pos
@@ -413,6 +509,71 @@ def recover_chicken_if_dropped(env_uw, rng: np.random.Generator) -> bool:
         place_chicken_on_table(env_uw, rng, reason="drop reset")
         return True
     return False
+
+
+def sample_episode_arm_offset(rng: np.random.Generator) -> np.ndarray:
+    ranges = np.deg2rad(np.array(args_cli.robot_start_noise_deg, dtype=np.float32))
+    if np.max(np.abs(ranges)) <= 0.0:
+        return np.zeros(6, dtype=np.float32)
+    return rng.uniform(-np.abs(ranges), np.abs(ranges)).astype(np.float32)
+
+
+def make_episode_quality_tracker(env_uw, episode_idx: int, arm_offset: np.ndarray) -> dict:
+    chicken_pos = get_chicken_root_pos_w(env_uw)
+    chicken_quat = get_chicken_root_quat_w(env_uw)
+    robot_joints = get_sim_arm_joints(env_uw).astype(np.float32)
+    return {
+        "episode_idx": int(episode_idx),
+        "started_wall_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "chicken_start_pos": chicken_pos.astype(float).tolist(),
+        "chicken_start_quat_wxyz": chicken_quat.astype(float).tolist(),
+        "chicken_start_yaw_rad": _quat_wxyz_to_yaw(chicken_quat),
+        "robot_start_joint": robot_joints.astype(float).tolist(),
+        "episode_arm_offset": arm_offset.astype(float).tolist(),
+        "first_gripper_close_step": None,
+        "first_gripper_close_time_s": None,
+        "max_chicken_height": float(chicken_pos[2]),
+        "max_lift_above_start": 0.0,
+        "success": False,
+        "human_clean": None,
+        "episode_length": 0,
+        "ended_reason": None,
+    }
+
+
+def update_episode_quality_tracker(
+    tracker: dict,
+    env_uw,
+    action: np.ndarray,
+    step_idx: int,
+    timestamp: float,
+) -> None:
+    chicken_z = float(get_chicken_root_pos_w(env_uw)[2])
+    start_z = float(tracker["chicken_start_pos"][2])
+    lift = chicken_z - start_z
+    tracker["max_chicken_height"] = max(float(tracker["max_chicken_height"]), chicken_z)
+    tracker["max_lift_above_start"] = max(float(tracker["max_lift_above_start"]), lift)
+    tracker["episode_length"] = int(step_idx + 1)
+    tracker["success"] = bool(float(tracker["max_lift_above_start"]) >= args_cli.success_lift_height)
+    if tracker["first_gripper_close_step"] is None and float(action[6]) < 0.0:
+        tracker["first_gripper_close_step"] = int(step_idx)
+        tracker["first_gripper_close_time_s"] = float(timestamp)
+
+
+def make_contact_sheet(frames: list[np.ndarray], max_cols: int = 4) -> np.ndarray | None:
+    if not frames or not _HAS_CV2:
+        return None
+    thumbs = []
+    for idx, frame in enumerate(frames):
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        thumb = cv2.resize(bgr, (240, 135), interpolation=cv2.INTER_AREA)
+        cv2.putText(thumb, f"{idx}", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+        thumbs.append(thumb)
+    cols = min(max_cols, len(thumbs))
+    rows = int(np.ceil(len(thumbs) / cols))
+    blank = np.zeros_like(thumbs[0])
+    padded = thumbs + [blank] * (rows * cols - len(thumbs))
+    return np.vstack([np.hstack(padded[row * cols:(row + 1) * cols]) for row in range(rows)])
 
 
 def draw_recording_overlay(rgb_frame: np.ndarray, recording: bool, elapsed_s: float) -> np.ndarray:
@@ -462,7 +623,168 @@ def _draw_preview_tile(frame: np.ndarray | None, label: str) -> np.ndarray:
     return tile
 
 
-def draw_multi_camera_preview(frames: dict[str, np.ndarray], recording: bool, elapsed_s: float) -> np.ndarray:
+def _coverage_world_to_pixel(x: float, y: float, half_range: float) -> tuple[int, int]:
+    half_range = max(float(half_range), 0.05)
+    px = int((x - (TABLE_CENTER_X - half_range)) / (2.0 * half_range) * (PREVIEW_TILE_W - 1))
+    py = int((1.0 - (y - (TABLE_CENTER_Y - half_range)) / (2.0 * half_range)) * (PREVIEW_TILE_H - 1))
+    return px, py
+
+
+def _chicken_contour_points_m(length: float, width: float) -> np.ndarray:
+    half_l = 0.5 * length
+    half_w = 0.5 * width
+    return np.array(
+        [
+            [-0.95 * half_l, -0.12 * half_w],
+            [-0.75 * half_l, -0.72 * half_w],
+            [-0.34 * half_l, -0.96 * half_w],
+            [0.18 * half_l, -0.72 * half_w],
+            [0.56 * half_l, -0.42 * half_w],
+            [0.92 * half_l, -0.28 * half_w],
+            [1.16 * half_l, 0.00 * half_w],
+            [0.92 * half_l, 0.28 * half_w],
+            [0.56 * half_l, 0.42 * half_w],
+            [0.18 * half_l, 0.72 * half_w],
+            [-0.34 * half_l, 0.96 * half_w],
+            [-0.75 * half_l, 0.72 * half_w],
+            [-0.95 * half_l, 0.12 * half_w],
+        ],
+        dtype=np.float32,
+    )
+
+
+def _transform_footprint_points(
+    local_xy_m: np.ndarray,
+    center_w: tuple[float, float],
+    yaw: float,
+    half_range: float,
+) -> np.ndarray:
+    c, s = np.cos(yaw), np.sin(yaw)
+    rot = np.array([[c, -s], [s, c]], dtype=np.float32)
+    world_xy = local_xy_m @ rot.T + np.array(center_w, dtype=np.float32)
+    return np.array([_coverage_world_to_pixel(float(x), float(y), half_range) for x, y in world_xy], dtype=np.int32)
+
+
+def _draw_coverage_footprint(
+    tile: np.ndarray,
+    entry: dict,
+    half_range: float,
+    color: tuple[int, int, int],
+    thickness: int,
+) -> None:
+    pos = entry.get("chicken_start_pos")
+    if not pos or len(pos) < 2:
+        return
+    yaw = float(entry.get("chicken_start_yaw_rad", 0.0))
+    length, width = [float(v) for v in args_cli.coverage_footprint_size]
+    pixels_per_meter_x = PREVIEW_TILE_W / (2.0 * max(half_range, 0.05))
+    center = _coverage_world_to_pixel(float(pos[0]), float(pos[1]), half_range)
+    contour_m = _chicken_contour_points_m(length, width)
+    # Convert through world coordinates so yaw and map aspect are handled consistently.
+    contour_px = _transform_footprint_points(contour_m, (float(pos[0]), float(pos[1])), yaw, half_range)
+    if thickness < 0:
+        cv2.fillPoly(tile, [contour_px], color, cv2.LINE_AA)
+    else:
+        cv2.polylines(tile, [contour_px], isClosed=True, color=color, thickness=thickness, lineType=cv2.LINE_AA)
+
+    # Add two darker leg/wing hints so the footprint reads as a chicken-like shape.
+    leg_offset = 0.16 * length
+    leg_span = 0.35 * width
+    hints = np.array(
+        [
+            [-leg_offset, -0.5 * leg_span],
+            [-leg_offset, 0.5 * leg_span],
+            [0.12 * length, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    hint_px = _transform_footprint_points(hints, (float(pos[0]), float(pos[1])), yaw, half_range)
+    hint_color = tuple(max(0, int(v) - 45) for v in color)
+    cv2.polylines(tile, [hint_px], isClosed=False, color=hint_color, thickness=max(1, thickness if thickness > 0 else 1), lineType=cv2.LINE_AA)
+    cv2.circle(tile, center, max(2, int(0.012 * pixels_per_meter_x)), hint_color, -1, cv2.LINE_AA)
+
+
+def draw_coverage_tile(saved_entries: list[dict], current_entry: dict | None = None) -> np.ndarray:
+    half_range = max(
+        float(args_cli.coverage_map_half_range),
+        abs(float(args_cli.chicken_xy_range[0])) + 0.08,
+        abs(float(args_cli.chicken_xy_range[1])) + 0.08,
+    )
+    tile = np.full((PREVIEW_TILE_H, PREVIEW_TILE_W, 3), 28, dtype=np.uint8)
+    cv2.rectangle(tile, (0, 0), (PREVIEW_TILE_W, PREVIEW_LABEL_H), (12, 12, 12), -1)
+    cv2.putText(tile, "COVERAGE", (14, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (245, 245, 245), 2, cv2.LINE_AA)
+
+    for frac in (0.25, 0.5, 0.75):
+        x = int(frac * PREVIEW_TILE_W)
+        y = int(frac * PREVIEW_TILE_H)
+        cv2.line(tile, (x, PREVIEW_LABEL_H), (x, PREVIEW_TILE_H), (55, 55, 55), 1, cv2.LINE_AA)
+        cv2.line(tile, (0, y), (PREVIEW_TILE_W, y), (55, 55, 55), 1, cv2.LINE_AA)
+
+    center = _coverage_world_to_pixel(TABLE_CENTER_X, TABLE_CENTER_Y, half_range)
+    cv2.drawMarker(tile, center, (230, 230, 230), cv2.MARKER_CROSS, 16, 1, cv2.LINE_AA)
+
+    for entry in saved_entries:
+        color = (130, 130, 130)
+        if entry.get("success") and entry.get("human_clean") is not False:
+            color = (165, 165, 165)
+        _draw_coverage_footprint(tile, entry, half_range, color, -1)
+
+    if current_entry is not None:
+        _draw_coverage_footprint(tile, current_entry, half_range, (0, 220, 255), 2)
+
+    label = f"{len(saved_entries)} saved | span +/-{half_range:.2f}m"
+    cv2.putText(tile, label, (14, PREVIEW_TILE_H - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
+    return tile
+
+
+def save_coverage_map(out_dir: pathlib.Path, saved_entries: list[dict], current_entry: dict | None = None) -> None:
+    if not _HAS_CV2:
+        return
+    quality_dir = out_dir / "quality"
+    quality_dir.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(quality_dir / "coverage_map_latest.jpg"), draw_coverage_tile(saved_entries, current_entry))
+
+
+def load_saved_coverage_entries(out_dir: pathlib.Path) -> list[dict]:
+    path = out_dir / "quality" / "episode_metadata.jsonl"
+    entries = []
+    if not path.exists():
+        return entries
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "chicken_start_pos" in entry:
+                entries.append(entry)
+    return entries
+
+
+def make_runtime_chicken_rigid_object_cfg(chicken_cfg) -> RigidObjectCfg:
+    init_state = chicken_cfg.init_state
+    return RigidObjectCfg(
+        prim_path=chicken_cfg.prim_path,
+        spawn=chicken_cfg.spawn,
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=tuple(float(v) for v in init_state.pos),
+            rot=tuple(float(v) for v in init_state.rot),
+            lin_vel=(0.0, 0.0, 0.0),
+            ang_vel=(0.0, 0.0, 0.0),
+        ),
+    )
+
+
+def draw_multi_camera_preview(
+    frames: dict[str, np.ndarray],
+    recording: bool,
+    elapsed_s: float,
+    quality: dict | None = None,
+    coverage_entries: list[dict] | None = None,
+) -> np.ndarray:
     """Return a BGR 2x2 preview grid with wrist, left, right, and a black empty tile."""
 
     labels = [
@@ -472,6 +794,7 @@ def draw_multi_camera_preview(frames: dict[str, np.ndarray], recording: bool, el
         ("__empty__", ""),
     ]
     tiles = [_draw_preview_tile(frames.get(key), label) for key, label in labels]
+    tiles[3] = draw_coverage_tile(coverage_entries or [], quality)
     preview = np.vstack((np.hstack((tiles[0], tiles[1])), np.hstack((tiles[2], tiles[3]))))
     mins = int(elapsed_s // 60)
     secs = int(elapsed_s % 60)
@@ -487,6 +810,16 @@ def draw_multi_camera_preview(frames: dict[str, np.ndarray], recording: bool, el
             2,
             cv2.LINE_AA,
         )
+        if quality is not None:
+            clean = quality.get("human_clean")
+            clean_label = "unset" if clean is None else ("yes" if clean else "no")
+            stats = (
+                f"steps {quality.get('episode_length', 0)} | "
+                f"close {quality.get('first_gripper_close_step')} | "
+                f"lift {float(quality.get('max_lift_above_start', 0.0)):.3f}m | "
+                f"success {quality.get('success', False)} | clean {clean_label}"
+            )
+            cv2.putText(preview, stats, (18, 94), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2, cv2.LINE_AA)
     else:
         cv2.putText(preview, "READY", (18, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (230, 230, 230), 2, cv2.LINE_AA)
     return preview
@@ -664,12 +997,17 @@ class ZarrDemoWriter:
         extra_image_keys: list[str] | None = None,
         store_images: bool = True,
         save_videos: bool = False,
+        save_contact_sheets: bool = True,
+        contact_sheet_stride: int = 15,
     ):
         root      = pathlib.Path(out_dir)
         zarr_path = root / "replay_buffer.zarr"
         vid_dir   = root / "videos"
+        quality_dir = root / "quality"
 
         self.vid_dir   = vid_dir
+        self.quality_dir = quality_dir
+        self.metadata_jsonl = quality_dir / "episode_metadata.jsonl"
         self.video_fps = video_fps
         self.image_key = image_key
         self.image_keys = [image_key]
@@ -678,8 +1016,11 @@ class ZarrDemoWriter:
                 self.image_keys.append(key)
         self.store_images = store_images
         self.save_videos = save_videos
+        self.save_contact_sheets = save_contact_sheets and _HAS_CV2
+        self.contact_sheet_stride = max(int(contact_sheet_stride), 1)
         if self.save_videos:
             vid_dir.mkdir(parents=True, exist_ok=True)
+        quality_dir.mkdir(parents=True, exist_ok=True)
 
         store      = zarr.DirectoryStore(str(zarr_path))
         self._root = zarr.open_group(store, mode="a")
@@ -703,6 +1044,7 @@ class ZarrDemoWriter:
         self._bufs: dict[str, list] = {k: [] for k in self.FEATURES}
         self._frames: dict[str, list[np.ndarray]] = {key: [] for key in self.image_keys}
         self._zarr_images: dict[str, list[np.ndarray]] = {key: [] for key in self.image_keys}
+        self._review_frames: list[np.ndarray] = []
         self._write_queue: queue.Queue[dict | None] = queue.Queue()
         self._worker_error: BaseException | None = None
         self._writer_thread = threading.Thread(
@@ -749,8 +1091,15 @@ class ZarrDemoWriter:
                 raise RuntimeError(f"Missing camera frame(s) for zarr image keys: {missing}")
             for key in self.image_keys:
                 self._zarr_images[key].append(cameras[key].astype(np.uint8, copy=False))
+        if (
+            self.save_contact_sheets
+            and cameras is not None
+            and self.image_key in cameras
+            and len(self._bufs["timestamp"]) % self.contact_sheet_stride == 1
+        ):
+            self._review_frames.append(cameras[self.image_key].astype(np.uint8, copy=False))
 
-    def save_episode(self) -> bool:
+    def save_episode(self, metadata: dict | None = None) -> bool:
         self._raise_worker_error_if_needed()
         T = self.ep_len
         if T == 0:
@@ -766,6 +1115,8 @@ class ZarrDemoWriter:
             "features": {},
             "images": None,
             "frames": {},
+            "review_frames": list(self._review_frames),
+            "metadata": metadata or {},
         }
         for key, dim in self.FEATURES.items():
             payload["features"][key] = np.stack(self._bufs[key]).astype(np.float32)
@@ -810,6 +1161,7 @@ class ZarrDemoWriter:
             self._frames[key].clear()
         for key in self._zarr_images:
             self._zarr_images[key].clear()
+        self._review_frames.clear()
 
     def _validate_or_explain_resume_state(self):
         data_grp = self._root["data"]
@@ -917,6 +1269,24 @@ class ZarrDemoWriter:
                 out.release()
                 print(f"[writer] mp4  → {vpath}  ({len(frames)} frames @ {self.video_fps} fps)")
 
+        metadata = dict(payload.get("metadata") or {})
+        metadata.setdefault("episode_idx", int(ep_idx))
+        metadata.setdefault("episode_length", int(T))
+        metadata.setdefault("total_steps_after_episode", int(payload["total_steps"]))
+        metadata_path = self.quality_dir / f"episode_{ep_idx:06d}.json"
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2, sort_keys=True)
+        with open(self.metadata_jsonl, "a") as f:
+            f.write(json.dumps(metadata, sort_keys=True) + "\n")
+        print(f"[writer] quality → {metadata_path}")
+
+        review_frames = payload.get("review_frames") or []
+        sheet = make_contact_sheet(review_frames)
+        if sheet is not None:
+            sheet_path = self.quality_dir / f"episode_{ep_idx:06d}_contact_sheet.jpg"
+            cv2.imwrite(str(sheet_path), sheet)
+            print(f"[writer] contact sheet → {sheet_path}")
+
     def _raise_worker_error_if_needed(self):
         if self._worker_error is not None:
             raise RuntimeError("Background demo writer failed.") from self._worker_error
@@ -928,6 +1298,7 @@ class ZarrDemoWriter:
 
 def main():
     env_cfg = parse_env_cfg(TASK_ID, device=args_cli.device, num_envs=1, use_fabric=True)
+    env_cfg.scene.chicken = make_runtime_chicken_rigid_object_cfg(env_cfg.scene.chicken)
     env_cfg.episode_length_s = 10000.0
     env    = gym.make(TASK_ID, cfg=env_cfg)
     env_uw = env.unwrapped
@@ -943,12 +1314,16 @@ def main():
 
     # ── keyboard ──────────────────────────────────────────────────────────────
     kb    = SimpleKeyboard()
-    flags = {"recording": False, "save": False, "discard": False, "quit": False}
+    flags = {"recording": False, "save": False, "discard": False, "quit": False, "human_clean": None}
     kb.add_callback("C",         lambda: (flags.update({"recording": True})
                                           or print("\n[REC] Recording — S to save, Backspace to discard")))
     kb.add_callback("S",         lambda: flags.update({"save": True}))
     kb.add_callback("BACKSPACE", lambda: flags.update({"discard": True}))
     kb.add_callback("Q",         lambda: flags.update({"quit": True}))
+    kb.add_callback("Y",         lambda: (flags.update({"human_clean": True})
+                                          or print("[quality] Marked current episode clean.")))
+    kb.add_callback("N",         lambda: (flags.update({"human_clean": False})
+                                          or print("[quality] Marked current episode not clean.")))
 
     # ── writer ────────────────────────────────────────────────────────────────
     writer = ZarrDemoWriter(
@@ -958,14 +1333,24 @@ def main():
         extra_image_keys=[args_cli.left_image_key, args_cli.right_image_key],
         store_images=not args_cli.no_zarr_images,
         save_videos=args_cli.save_videos,
+        save_contact_sheets=not args_cli.no_contact_sheets,
+        contact_sheet_stride=args_cli.contact_sheet_stride,
     )
+    out_root = pathlib.Path(args_cli.out_dir)
+    coverage_entries = load_saved_coverage_entries(out_root)
+    if coverage_entries:
+        save_coverage_map(out_root, coverage_entries)
     print(f"\n[INFO] Output: {args_cli.out_dir}")
     print(f"[INFO] Resuming from {writer.n_episodes} episodes\n")
+    print(f"[INFO] Coverage map has {len(coverage_entries)} saved chicken placements\n")
     print("Controls: C=record  S=save  Backspace=discard  Q=quit\n")
 
     # ── startup: drive robot toward GELLO's current pose through articulation drives ──
     env.reset()
     place_chicken_on_table(env_uw, rng, reason="initial placement")
+    episode_arm_offset = sample_episode_arm_offset(rng)
+    if np.max(np.abs(episode_arm_offset)) > 0.0:
+        print(f"[reset] Episode arm offset deg: {np.rad2deg(episode_arm_offset)}")
     rb_pos_z = env_uw.scene["robot"].data.root_pos_w[0, 2].item()  # type: ignore[union-attr]
     print(f"[DEBUG] Robot base Z after reset = {rb_pos_z:.4f}  (expected 0.63)")
     robot = env_uw.scene["robot"]
@@ -989,7 +1374,10 @@ def main():
         f"wrist_2_joint={last_arm_joints[_WRIST_ROLL_ID]:+.3f} rad fixed, "
         "wrist_1_joint compensates shoulder/elbow, wrist_3_joint remains active for yaw."
     )
-    gello_start = keep_tool_perpendicular_targets(snap_to_gello(env_uw, gello), perpendicular_reference_joints)
+    gello_start = keep_tool_perpendicular_targets(
+        snap_to_gello(env_uw, gello) + episode_arm_offset,
+        perpendicular_reference_joints,
+    )
     for _ in range(120):
         last_arm_joints = rate_limit_arm_targets(last_arm_joints, gello_start, MAX_ARM_TARGET_STEP_RAD)
         env.step(torch.tensor(np.array([*last_arm_joints, 1.0, 1.0], dtype=np.float32),
@@ -1005,6 +1393,8 @@ def main():
     loop_step    = 0
     preview_window_size = None
     z_limit_warn_step = -GRIPPER_Z_LIMIT_WARN_INTERVAL
+    episode_tracker = None
+    lifted_hold_steps = 0
 
     while simulation_app.is_running() and not flags["quit"]:
         if args_cli.num_demos > 0 and demos_saved >= args_cli.num_demos:
@@ -1013,7 +1403,7 @@ def main():
 
         # ── GELLO read ────────────────────────────────────────────────────────
         gello_state  = gello.get_joints()
-        arm_joints   = gello_state[:6].astype(np.float32) * GELLO_SIGNS + GELLO_OFFSETS
+        arm_joints   = gello_state[:6].astype(np.float32) * GELLO_SIGNS + GELLO_OFFSETS + episode_arm_offset
         arm_joints   = keep_tool_perpendicular_targets(arm_joints, perpendicular_reference_joints)
         if gripper_z_limit_w is not None:
             gripper_z_w = get_gripper_tip_z_w(env_uw)
@@ -1040,6 +1430,18 @@ def main():
         # ── observe + optional camera (before step) ──────────────────────────
         obs_dict  = extract_obs_dict(env_uw)
         reward, stage = compute_reward_stage(obs_dict)
+        if flags["recording"] and episode_tracker is None:
+            flags["human_clean"] = None
+            episode_tracker = make_episode_quality_tracker(env_uw, writer.n_episodes, episode_arm_offset)
+            lifted_hold_steps = 0
+            print(
+                "[quality] Episode started: "
+                f"chicken=({episode_tracker['chicken_start_pos'][0]:+.3f}, "
+                f"{episode_tracker['chicken_start_pos'][1]:+.3f}, "
+                f"{episode_tracker['chicken_start_pos'][2]:+.3f}), "
+                f"yaw={np.rad2deg(episode_tracker['chicken_start_yaw_rad']):+.1f} deg. "
+                "Press Y=clean, N=not clean before saving."
+            )
 
         preview_stride = max(args_cli.preview_stride, 1)
         preview_allowed = (
@@ -1056,7 +1458,15 @@ def main():
         if need_preview and cam_frame is not None:
             if preview_window_size is None:
                 preview_window_size = create_resizable_preview_window(args_cli.preview_width, args_cli.preview_height)
-            preview = draw_multi_camera_preview(cam_frames, flags["recording"], ep_timestamp)
+            if episode_tracker is not None:
+                episode_tracker["human_clean"] = flags["human_clean"]
+            preview = draw_multi_camera_preview(
+                cam_frames,
+                flags["recording"],
+                ep_timestamp,
+                episode_tracker,
+                coverage_entries,
+            )
             cv2.imshow(PREVIEW_WINDOW_NAME, preview)
             handle_preview_window_key(cv2.waitKey(1) & 0xFF, preview_window_size)
         elif preview_allowed:
@@ -1071,12 +1481,22 @@ def main():
         if loop_step % CHICKEN_DROP_CHECK_INTERVAL == 0:
             dropped = recover_chicken_if_dropped(env_uw, rng)
             if dropped and flags["recording"]:
-                print("[chicken] dropped during recording; reset on table and skipped this sample")
+                print("[chicken] dropped during recording; discarding this episode")
+                if episode_tracker is not None:
+                    episode_tracker["ended_reason"] = "dropped"
+                flags["discard"] = True
 
         # ── record ────────────────────────────────────────────────────────────
         if flags["recording"] and not dropped:
             if cam_frames is None:
                 cam_frames = get_camera_frames(env_uw)
+            if episode_tracker is not None:
+                update_episode_quality_tracker(episode_tracker, env_uw, action_np, rec_steps, ep_timestamp)
+                stage = 1 if episode_tracker["success"] else stage
+                if episode_tracker["success"]:
+                    lifted_hold_steps += 1
+                else:
+                    lifted_hold_steps = 0
             writer.add_step(obs_dict, action_np, cam_frames,
                             timestamp=ep_timestamp, stage=stage)
             rec_steps    += 1
@@ -1085,21 +1505,50 @@ def main():
             if rec_steps % 50 == 0:
                 print(
                     f"  [REC] {rec_steps} steps  (saved: {demos_saved})  "
-                    f"reward={reward:.1f}"
+                    f"reward={reward:.1f}  "
+                    f"close={episode_tracker['first_gripper_close_step'] if episode_tracker else None}  "
+                    f"max_lift={episode_tracker['max_lift_above_start'] if episode_tracker else 0.0:.3f} m  "
+                    f"success={episode_tracker['success'] if episode_tracker else False}"
                 )
+
+            if (
+                args_cli.auto_stop_on_lift
+                and lifted_hold_steps >= max(args_cli.auto_stop_hold_steps, 1)
+            ):
+                print(
+                    "\n[quality] Lift held above threshold — auto-saving "
+                    f"(max_lift={episode_tracker['max_lift_above_start']:.3f} m)"
+                )
+                if episode_tracker is not None:
+                    episode_tracker["ended_reason"] = "auto_lift_success"
+                flags["save"] = True
 
             if args_cli.episode_steps > 0 and rec_steps >= args_cli.episode_steps:
                 print("\n[INFO] Max episode length — auto-saving")
+                if episode_tracker is not None:
+                    episode_tracker["ended_reason"] = "max_episode_steps"
                 flags["save"] = True
 
         # ── save ──────────────────────────────────────────────────────────────
         if flags["save"]:
-            if writer.save_episode():
+            if episode_tracker is not None:
+                episode_tracker["human_clean"] = flags["human_clean"]
+                episode_tracker["ended_reason"] = episode_tracker["ended_reason"] or "manual_save"
+            saved_metadata = dict(episode_tracker) if episode_tracker is not None else None
+            if writer.save_episode(saved_metadata):
                 demos_saved += 1
+                if saved_metadata is not None:
+                    coverage_entries.append(saved_metadata)
+                    save_coverage_map(out_root, coverage_entries)
             flags.update({"recording": False, "save": False})
             rec_steps    = 0
             ep_timestamp = 0.0
-            last_arm_joints = _reset_env(env, env_uw, gello, rng, perpendicular_reference_joints).astype(np.float32).copy()
+            episode_tracker = None
+            lifted_hold_steps = 0
+            episode_arm_offset = sample_episode_arm_offset(rng)
+            last_arm_joints = _reset_env(
+                env, env_uw, gello, rng, perpendicular_reference_joints, episode_arm_offset
+            ).astype(np.float32).copy()
             print(f"  → {demos_saved} episodes saved. Press C for next.\n")
 
         # ── discard ───────────────────────────────────────────────────────────
@@ -1108,19 +1557,36 @@ def main():
             flags.update({"recording": False, "discard": False})
             rec_steps    = 0
             ep_timestamp = 0.0
-            last_arm_joints = _reset_env(env, env_uw, gello, rng, perpendicular_reference_joints).astype(np.float32).copy()
+            episode_tracker = None
+            lifted_hold_steps = 0
+            episode_arm_offset = sample_episode_arm_offset(rng)
+            last_arm_joints = _reset_env(
+                env, env_uw, gello, rng, perpendicular_reference_joints, episode_arm_offset
+            ).astype(np.float32).copy()
             print("  → Discarded. Press C for a new episode.\n")
 
         # ── auto-reset on env termination ─────────────────────────────────────
         if terminated or truncated:
             if flags["recording"] and writer.ep_len > 0:
                 print("\n[WARN] Episode terminated early — auto-saving")
-                if writer.save_episode():
+                if episode_tracker is not None:
+                    episode_tracker["human_clean"] = flags["human_clean"]
+                    episode_tracker["ended_reason"] = "env_terminated"
+                saved_metadata = dict(episode_tracker) if episode_tracker is not None else None
+                if writer.save_episode(saved_metadata):
                     demos_saved += 1
+                    if saved_metadata is not None:
+                        coverage_entries.append(saved_metadata)
+                        save_coverage_map(out_root, coverage_entries)
                 flags["recording"] = False
                 rec_steps    = 0
                 ep_timestamp = 0.0
-            last_arm_joints = _reset_env(env, env_uw, gello, rng, perpendicular_reference_joints).astype(np.float32).copy()
+                episode_tracker = None
+                lifted_hold_steps = 0
+            episode_arm_offset = sample_episode_arm_offset(rng)
+            last_arm_joints = _reset_env(
+                env, env_uw, gello, rng, perpendicular_reference_joints, episode_arm_offset
+            ).astype(np.float32).copy()
 
         loop_step += 1
 
@@ -1134,9 +1600,18 @@ def main():
     print(f"\nDone. {demos_saved} episodes in {args_cli.out_dir}/replay_buffer.zarr/")
 
 
-def _reset_env(env, env_uw, gello, rng: np.random.Generator, perpendicular_reference_joints: np.ndarray):
+def _reset_env(
+    env,
+    env_uw,
+    gello,
+    rng: np.random.Generator,
+    perpendicular_reference_joints: np.ndarray,
+    episode_arm_offset: np.ndarray,
+):
     env.reset()
     place_chicken_on_table(env_uw, rng, reason="episode reset")
+    if np.max(np.abs(episode_arm_offset)) > 0.0:
+        print(f"[reset] Episode arm offset deg: {np.rad2deg(episode_arm_offset)}")
     robot = env_uw.scene["robot"]
     ids, _ = robot.find_joints(_ARM_JOINT_NAMES)
     current = robot.data.joint_pos[0, ids].cpu().numpy().astype(np.float32)
@@ -1144,7 +1619,10 @@ def _reset_env(env, env_uw, gello, rng: np.random.Generator, perpendicular_refer
     for _ in range(CHICKEN_SETTLE_STEPS):
         env.step(torch.tensor(np.array([*current, 1.0, 1.0], dtype=np.float32),
                               device=env_uw.device).unsqueeze(0))
-    g = keep_tool_perpendicular_targets(snap_to_gello(env_uw, gello), perpendicular_reference_joints)
+    g = keep_tool_perpendicular_targets(
+        snap_to_gello(env_uw, gello) + episode_arm_offset,
+        perpendicular_reference_joints,
+    )
     for _ in range(120):
         current = rate_limit_arm_targets(current, g, MAX_ARM_TARGET_STEP_RAD)
         env.step(torch.tensor(np.array([*current, 1.0, 1.0], dtype=np.float32),
