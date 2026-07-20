@@ -50,9 +50,9 @@ Run:
 ```bash
 cd /home/wanglab22/3_chicken-isaaclab
 
-./isaaclab.sh -p scripts/imitation_learning/01_collect_chicken_rgb_state_demos.py \
-  --out_dir ./data/chicken_rgb_state \
-  --num_demos 50 \
+./isaaclab.sh -p scripts/imitation_learning/collect_isaac_pile_demos.py \
+  --out_dir ./data/chicken_gello_clean_rgb_state_v2 \
+  --num_demos 150 \
   --save_videos
 ```
 
@@ -67,16 +67,21 @@ Q          quit
 
 Notes:
 
-- Episodes are unlimited by default.
-- The camera preview shows a red recording dot and elapsed time while recording.
-- The chicken is randomized in X/Y after each episode.
+- The camera preview shows a red recording dot, elapsed time, quality stats, coverage map, and saved episode count.
+- Chicken placement follows a deterministic tabletop scan: 3 cm vertical steps, 2 cm horizontal shifts, straight yaw, and table-safe bounds.
+- Success is a chicken lift of `0.08 m` above the episode start height.
+- Successful lifts auto-save by default after the lift is held for 10 steps, then reset to the next scan position.
 - If the chicken drops below the table, it is placed back on the table.
-- Videos are saved under `data/chicken_rgb_state/videos/`.
+- Videos are saved under `data/chicken_gello_clean_rgb_state_v2/videos/` when `--save_videos` is passed.
+- Quality metadata, contact sheets, and the coverage map are saved under `data/chicken_gello_clean_rgb_state_v2/quality/`.
 
 Useful options:
 
 ```bash
---chicken_xy_range 0.08 0.12
+--placement_vertical_step 0.03
+--placement_horizontal_step 0.02
+--success_lift_height 0.08
+--no-auto_stop_on_lift
 --chicken_seed 123
 --disable_chicken_drop_reset
 --episode_steps 300
@@ -87,12 +92,14 @@ Useful options:
 Collection writes:
 
 ```text
-data/chicken_rgb_state/
+data/chicken_gello_clean_rgb_state_v2/
   replay_buffer.zarr/
     data/
       action
       state
       camera_rgb
+      camera_left_rgb
+      camera_right_rgb
       left_jaw
       right_jaw
       robot_eef_pose
@@ -104,14 +111,23 @@ data/chicken_rgb_state/
     meta/
       episode_ends
   videos/
+    episode_000000.mp4
+    camera_left_rgb/
+    camera_right_rgb/
+  quality/
+    episode_metadata.jsonl
+    coverage_map_latest.jpg
+    episode_000000_contact_sheet.jpg
 ```
 
 The important training arrays are:
 
 ```text
-data/action      # (T, 8)
-data/state       # (T, 20)
-data/camera_rgb  # (T, H, W, 3)
+data/action            # (T, 8)
+data/state             # (T, 20)
+data/camera_rgb        # wrist camera, (T, 480, 640, 3)
+data/camera_left_rgb   # left side table camera, (T, 360, 480, 3)
+data/camera_right_rgb  # right side table camera, (T, 360, 480, 3)
 ```
 
 ## Inspect And Visualize Data
@@ -120,21 +136,21 @@ Inspect zarr structure:
 
 ```bash
 python scripts/imitation_learning/inspect_dp_zarr.py \
-  --zarr_path ./data/chicken_rgb_state/replay_buffer.zarr
+  --zarr_path ./data/chicken_gello_clean_rgb_state_v2/replay_buffer.zarr
 ```
 
 Generate low-dimensional plots and camera contact sheets:
 
 ```bash
 python scripts/imitation_learning/visualize_chicken_zarr.py \
-  --zarr_path ./data/chicken_rgb_state/replay_buffer.zarr \
+  --zarr_path ./data/chicken_gello_clean_rgb_state_v2/replay_buffer.zarr \
   --episode 0
 ```
 
 This creates:
 
 ```text
-data/chicken_rgb_state/plots/
+data/chicken_gello_clean_rgb_state_v2/plots/
   dataset_overview.png
   episode_000000_lowdim.png
   episode_000000_camera_sheet.png
@@ -150,8 +166,8 @@ conda activate robodiff
 unset PYTHONPATH
 
 python scripts/imitation_learning/02_train_chicken_rgb_state_policy.py \
-  --zarr_path /home/wanglab22/3_chicken-isaaclab/data/chicken_rgb_state/replay_buffer.zarr \
-  --num_epochs 450 \
+  --zarr_path /home/wanglab22/3_chicken-isaaclab/data/chicken_gello_clean_rgb_state_v2/replay_buffer.zarr \
+  --num_epochs 60 \
   --batch_size 32 \
   --num_workers 4 \
   --logging_mode offline
@@ -173,7 +189,9 @@ cd /home/wanglab22/3_chicken-isaaclab
 ./isaaclab.sh -p scripts/imitation_learning/03_eval_chicken_rgb_state_policy.py \
   --checkpoint /home/wanglab22/ChicGrasp-IsaacChicken/data/outputs/<date>/<run_name>/checkpoints/latest.ckpt \
   --num_episodes 3 \
-  --episode_steps 300
+  --episode_steps 300 \
+  --preview_width 1280 \
+  --preview_height 720
 ```
 
 Low-dimensional checkpoints can be evaluated with:

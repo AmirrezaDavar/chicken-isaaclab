@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
-"""Train ChicGrasp Diffusion Policy using Isaac chicken RGB + low-dimensional state.
+"""Train ChicGrasp Diffusion Policy using Isaac chicken multi-camera RGB + low-dimensional state.
 
 This script installs the tiny Isaac-specific zarr dataset/config bridge into
 the separate ChicGrasp-IsaacChicken checkout, then launches its official
@@ -9,6 +9,8 @@ train.py. The collected zarr layout remains:
   replay_buffer.zarr/
     data/action
     data/camera_rgb
+    data/camera_left_rgb
+    data/camera_right_rgb
     data/state
     meta/episode_ends
 
@@ -16,14 +18,14 @@ Example smoke test:
   conda activate robodiff
   python scripts/imitation_learning/02_train_chicken_rgb_state_policy.py \
       --zarr_path /home/wanglab22/3_chicken-isaaclab/data/chicken_rgb_state/replay_buffer.zarr \
-      --num_epochs 5 --max_train_steps 20 --max_val_steps 5 --batch_size 8 \
+      --num_epochs 5 --max_train_steps 20 --max_val_steps 5 --batch_size 1 \
       --logging_mode offline
 
 Full run:
   conda activate robodiff
   python scripts/imitation_learning/02_train_chicken_rgb_state_policy.py \
       --zarr_path /home/wanglab22/3_chicken-isaaclab/data/chicken_rgb_state/replay_buffer.zarr \
-      --num_epochs 450 --batch_size 32 --logging_mode offline
+      --num_epochs 450 --batch_size 2 --logging_mode offline
 """
 
 from __future__ import annotations
@@ -37,12 +39,13 @@ from pathlib import Path
 import zarr
 
 
-DEFAULT_CHICGRASP_ROOT = Path("/home/wanglab22/ChicGrasp-IsaacChicken")
+DEFAULT_CHICGRASP_ROOT = Path("/home/wanglab22/ChicGrasp")
 DEFAULT_ZARR = Path("/home/wanglab22/3_chicken-isaaclab/data/chicken_rgb_state/replay_buffer.zarr")
+DEFAULT_IMAGE_KEYS = ["camera_rgb", "camera_left_rgb", "camera_right_rgb"]
 
 
 DATASET_CODE = r'''
-"""Isaac chicken RGB+state zarr dataset for Diffusion Policy."""
+"""Isaac chicken multi-camera RGB+state zarr dataset for Diffusion Policy."""
 
 from __future__ import annotations
 
@@ -76,13 +79,17 @@ class IsaacChickenImageDataset(BaseImageDataset):
         seed: int = 42,
         val_ratio: float = 0.1,
         max_train_episodes: Optional[int] = None,
-        image_key: str = "camera_rgb",
+        image_keys: Optional[list[str]] = None,
         state_key: str = "state",
         action_key: str = "action",
     ):
         super().__init__()
 
-        self.image_key = image_key
+        if image_keys is None:
+            image_keys = ["camera_rgb", "camera_left_rgb", "camera_right_rgb"]
+        if isinstance(image_keys, str):
+            image_keys = [image_keys]
+        self.image_keys = list(image_keys)
         self.state_key = state_key
         self.action_key = action_key
         self.shape_meta = shape_meta
@@ -91,10 +98,9 @@ class IsaacChickenImageDataset(BaseImageDataset):
         self.pad_before = pad_before
         self.pad_after = pad_after
 
-        self.replay_buffer = ReplayBuffer.copy_from_path(
-            zarr_path,
-            keys=[image_key, state_key, action_key],
-        )
+        # Keep the zarr arrays disk-backed. Loading three RGB streams into RAM
+        # can exceed 30+ GB before the first optimizer step.
+        self.replay_buffer = ReplayBuffer.create_from_path(zarr_path, mode="r")
 
         val_mask = get_val_mask(
             n_episodes=self.replay_buffer.n_episodes,
@@ -105,7 +111,8 @@ class IsaacChickenImageDataset(BaseImageDataset):
 
         key_first_k = {}
         if n_obs_steps is not None:
-            key_first_k[image_key] = n_obs_steps
+            for image_key in self.image_keys:
+                key_first_k[image_key] = n_obs_steps
             key_first_k[state_key] = n_obs_steps
 
         self.sampler = SequenceSampler(
@@ -127,7 +134,7 @@ class IsaacChickenImageDataset(BaseImageDataset):
             pad_after=self.pad_after,
             episode_mask=~self.train_mask,
             key_first_k={
-                self.image_key: self.n_obs_steps,
+                **{image_key: self.n_obs_steps for image_key in self.image_keys},
                 self.state_key: self.n_obs_steps,
             },
         )
@@ -142,7 +149,8 @@ class IsaacChickenImageDataset(BaseImageDataset):
         normalizer[self.state_key] = SingleFieldLinearNormalizer.create_fit(
             self.replay_buffer[self.state_key]
         )
-        normalizer[self.image_key] = get_image_range_normalizer()
+        for image_key in self.image_keys:
+            normalizer[image_key] = get_image_range_normalizer()
         return normalizer
 
     def get_all_actions(self) -> torch.Tensor:
@@ -156,16 +164,17 @@ class IsaacChickenImageDataset(BaseImageDataset):
         sample = self.sampler.sample_sequence(idx)
         obs_slice = slice(self.n_obs_steps)
 
-        image = sample[self.image_key][obs_slice]
-        if image.dtype != np.uint8:
-            image = (image * 255.0).clip(0, 255).astype(np.uint8)
-        image = np.moveaxis(image, -1, 1).astype(np.float32) / 255.0
+        obs = {
+            self.state_key: sample[self.state_key][obs_slice].astype(np.float32),
+        }
+        for image_key in self.image_keys:
+            image = sample[image_key][obs_slice]
+            if image.dtype != np.uint8:
+                image = (image * 255.0).clip(0, 255).astype(np.uint8)
+            obs[image_key] = np.moveaxis(image, -1, 1).astype(np.float32) / 255.0
 
         data = {
-            "obs": {
-                self.image_key: image,
-                self.state_key: sample[self.state_key][obs_slice].astype(np.float32),
-            },
+            "obs": obs,
             "action": sample[self.action_key].astype(np.float32),
         }
         return dict_apply(data, torch.from_numpy)
@@ -187,22 +196,34 @@ class NullImageRunner(BaseImageRunner):
 '''
 
 
-def _inspect_zarr(zarr_path: Path, image_key: str, state_key: str, action_key: str) -> tuple[int, int, int, int]:
+def _inspect_zarr(
+    zarr_path: Path,
+    image_keys: list[str],
+    state_key: str,
+    action_key: str,
+) -> tuple[dict[str, tuple[int, int]], int, int]:
     root = zarr.open_group(str(zarr_path), mode="r")
     data = root["data"]
-    for key in (image_key, state_key, action_key):
+    for key in (*image_keys, state_key, action_key):
         if key not in data:
             raise SystemExit(f"Missing data/{key} in {zarr_path}")
-    image_shape = data[image_key].shape
     state_shape = data[state_key].shape
     action_shape = data[action_key].shape
-    if len(image_shape) != 4 or image_shape[-1] != 3:
-        raise SystemExit(f"data/{image_key} must be (T,H,W,3), got {image_shape}")
+    image_shapes = {}
+    for image_key in image_keys:
+        image_shape = data[image_key].shape
+        if len(image_shape) != 4 or image_shape[-1] != 3:
+            raise SystemExit(f"data/{image_key} must be (T,H,W,3), got {image_shape}")
+        if image_shape[0] != state_shape[0]:
+            raise SystemExit(f"data/{image_key} has {image_shape[0]} steps but data/{state_key} has {state_shape[0]}")
+        image_shapes[image_key] = (int(image_shape[1]), int(image_shape[2]))
     if state_shape[1] != 20:
         raise SystemExit(f"data/{state_key} must be (T,20), got {state_shape}")
     if action_shape[1] != 8:
         raise SystemExit(f"data/{action_key} must be (T,8), got {action_shape}")
-    return int(image_shape[1]), int(image_shape[2]), int(state_shape[1]), int(action_shape[1])
+    if action_shape[0] != state_shape[0]:
+        raise SystemExit(f"data/{action_key} has {action_shape[0]} steps but data/{state_key} has {state_shape[0]}")
+    return image_shapes, int(state_shape[1]), int(action_shape[1])
 
 
 def _write_if_changed(path: Path, text: str) -> None:
@@ -217,11 +238,10 @@ def _write_if_changed(path: Path, text: str) -> None:
 def install_chicgrasp_bridge(
     chicgrasp_root: Path,
     zarr_path: Path,
-    image_key: str,
+    image_keys: list[str],
     state_key: str,
     action_key: str,
-    height: int,
-    width: int,
+    image_shapes: dict[str, tuple[int, int]],
 ) -> None:
     _write_if_changed(
         chicgrasp_root / "diffusion_policy/dataset/isaac_chicken_image_dataset.py",
@@ -232,14 +252,20 @@ def install_chicgrasp_bridge(
         NULL_IMAGE_RUNNER_CODE,
     )
 
+    image_shape_meta = "\n".join(
+        f"""        {image_key}:
+          shape: [3, {image_shapes[image_key][0]}, {image_shapes[image_key][1]}]
+          type: rgb"""
+        for image_key in image_keys
+    )
+    image_keys_yaml = "\n".join(f"        - {image_key}" for image_key in image_keys)
+
     task_yaml = f"""
     name: isaac_chicken_image
 
     shape_meta: &shape_meta
       obs:
-        {image_key}:
-          shape: [3, {height}, {width}]
-          type: rgb
+{image_shape_meta}
         {state_key}:
           shape: [20]
           type: low_dim
@@ -253,7 +279,8 @@ def install_chicgrasp_bridge(
       _target_: diffusion_policy.dataset.isaac_chicken_image_dataset.IsaacChickenImageDataset
       shape_meta: *shape_meta
       zarr_path: {zarr_path}
-      image_key: {image_key}
+      image_keys:
+{image_keys_yaml}
       state_key: {state_key}
       action_key: {action_key}
       horizon: ${{horizon}}
@@ -309,11 +336,11 @@ def install_chicgrasp_bridge(
           _target_: diffusion_policy.model.vision.model_getter.get_resnet
           name: resnet18
           weights: null
-        resize_shape: [240, 320]
-        crop_shape: [216, 288]
+        resize_shape: [120, 160]
+        crop_shape: [108, 144]
         random_crop: True
         use_group_norm: True
-        share_rgb_model: False
+        share_rgb_model: True
         imagenet_norm: True
       horizon: ${{horizon}}
       n_action_steps: ${{eval:'${{n_action_steps}}+${{n_latency_steps}}'}}
@@ -321,7 +348,7 @@ def install_chicgrasp_bridge(
       num_inference_steps: 100
       obs_as_global_cond: ${{obs_as_global_cond}}
       diffusion_step_embed_dim: 128
-      down_dims: [512, 1024, 2048]
+      down_dims: [128, 256, 512]
       kernel_size: 5
       n_groups: 8
       cond_predict_scale: True
@@ -335,14 +362,14 @@ def install_chicgrasp_bridge(
       max_value: 0.9999
 
     dataloader:
-      batch_size: 32
+      batch_size: 1
       num_workers: 4
       shuffle: True
       pin_memory: True
       persistent_workers: False
 
     val_dataloader:
-      batch_size: 32
+      batch_size: 1
       num_workers: 4
       shuffle: False
       pin_memory: True
@@ -415,11 +442,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train RGB+state Diffusion Policy for Isaac chicken grasping.")
     parser.add_argument("--chicgrasp_root", type=Path, default=DEFAULT_CHICGRASP_ROOT)
     parser.add_argument("--zarr_path", type=Path, default=DEFAULT_ZARR)
-    parser.add_argument("--image_key", type=str, default="camera_rgb")
+    parser.add_argument("--image_keys", type=str, nargs="+", default=DEFAULT_IMAGE_KEYS,
+                        help="RGB zarr keys to train with. Defaults to all three Isaac cameras.")
+    parser.add_argument("--image_key", type=str, default=None,
+                        help="Backward-compatible single RGB key override. Prefer --image_keys.")
     parser.add_argument("--state_key", type=str, default="state")
     parser.add_argument("--action_key", type=str, default="action")
     parser.add_argument("--num_epochs", type=int, default=450)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--val_ratio", type=float, default=0.1)
     parser.add_argument("--max_train_steps", type=int, default=None)
@@ -436,15 +466,15 @@ def main() -> None:
     if not zarr_path.exists():
         raise SystemExit(f"Missing zarr dataset: {zarr_path}")
 
-    height, width, _, _ = _inspect_zarr(zarr_path, args.image_key, args.state_key, args.action_key)
+    image_keys = [args.image_key] if args.image_key is not None else list(args.image_keys)
+    image_shapes, _, _ = _inspect_zarr(zarr_path, image_keys, args.state_key, args.action_key)
     install_chicgrasp_bridge(
         chicgrasp_root=chicgrasp_root,
         zarr_path=zarr_path,
-        image_key=args.image_key,
+        image_keys=image_keys,
         state_key=args.state_key,
         action_key=args.action_key,
-        height=height,
-        width=width,
+        image_shapes=image_shapes,
     )
 
     cmd = [

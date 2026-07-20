@@ -33,7 +33,7 @@ Controls:
 Usage:
   cd /home/wanglab22/3_chicken-isaaclab
   python scripts/imitation_learning/collect_isaac_pile_demos.py \\
-      --out_dir ./data/chicken_rgb_state --num_demos 50
+      --out_dir ./data/chicken_rgb_state --num_demos 150
 """
 
 import argparse
@@ -56,7 +56,7 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Collect Isaac Sim chicken demos via GELLO.")
 parser.add_argument("--out_dir",       type=str,  default="./data/chicken_rgb_state")
-parser.add_argument("--num_demos",     type=int,  default=0,
+parser.add_argument("--num_demos",     type=int,  default=150,
                     help="Number of demos (0 = infinite).")
 parser.add_argument("--episode_steps", type=int,  default=0,
                     help="Max steps per episode before auto-save. 0 disables auto-save.")
@@ -87,20 +87,32 @@ parser.add_argument("--preview_width", type=int, default=1280,
                     help="Initial live camera popup width in pixels.")
 parser.add_argument("--preview_height", type=int, default=720,
                     help="Initial live camera popup height in pixels.")
-parser.add_argument("--chicken_xy_range", type=float, nargs=2, default=(0.08, 0.08),
+parser.add_argument("--chicken_xy_range", type=float, nargs=2, default=(0.25, 0.30),
                     metavar=("X_RANGE", "Y_RANGE"),
-                    help="Random chicken XY half-ranges in meters after each episode.")
+                    help="Max chicken XY half-ranges in meters. Clipped to safe tabletop coverage.")
 parser.add_argument("--chicken_yaw_range_deg", type=float, default=0.0,
-                    help="Random chicken yaw half-range in degrees after each episode.")
+                    help="Deprecated: chicken yaw is fixed straight for consistent GELLO demos.")
 parser.add_argument("--chicken_seed", type=int, default=None,
                     help="Random seed for chicken XY placement.")
+parser.add_argument("--placement_vertical_step", type=float, default=0.03,
+                    help="Vertical step in meters for deterministic chicken tabletop scan.")
+parser.add_argument("--placement_horizontal_step", type=float, default=0.02,
+                    help="Horizontal step in meters for deterministic chicken tabletop scan.")
+parser.add_argument("--placement_grid", type=int, nargs=2, default=(5, 5), help=argparse.SUPPRESS)
+parser.add_argument("--placement_jitter_fraction", type=float, default=0.0, help=argparse.SUPPRESS)
+parser.add_argument("--chicken_spawn_z_offset", type=float, default=-0.005,
+                    help="Extra root-Z offset in meters when placing chicken. Default removes old drop clearance.")
+parser.add_argument("--chicken_pin_steps", type=int, default=8,
+                    help="Reset-only steps that hold the chicken at the final pose with zero velocity.")
+parser.add_argument("--chicken_stable_speed", type=float, default=0.001,
+                    help="Chicken root motion threshold in m/step used to finish reset settling early.")
 parser.add_argument("--robot_start_noise_deg", type=float, nargs=6,
                     default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                     metavar=("J1", "J2", "J3", "J4", "J5", "J6"),
                     help="Per-episode GELLO-to-sim joint offset half-ranges in degrees.")
-parser.add_argument("--auto_stop_on_lift", action="store_true",
+parser.add_argument("--auto_stop_on_lift", action=argparse.BooleanOptionalAction, default=True,
                     help="Automatically save when the chicken has been lifted and held above threshold.")
-parser.add_argument("--success_lift_height", type=float, default=0.04,
+parser.add_argument("--success_lift_height", type=float, default=0.0800,
                     help="Chicken root height increase in meters required for a successful lift.")
 parser.add_argument("--auto_stop_hold_steps", type=int, default=10,
                     help="Consecutive lifted recording steps required before auto-save.")
@@ -113,6 +125,10 @@ parser.add_argument("--coverage_footprint_size", type=float, nargs=2, default=(0
                     help="Approx chicken footprint size in meters for top-down coverage preview.")
 parser.add_argument("--coverage_map_half_range", type=float, default=0.18,
                     help="Top-down coverage map XY half-range around table center in meters.")
+parser.add_argument("--table_safe_margin", type=float, default=0.025,
+                    help="Extra tabletop edge margin in meters beyond the chicken footprint.")
+parser.add_argument("--disable_table_bounds", action="store_true",
+                    help="Allow chicken randomization to exceed safe tabletop footprint limits.")
 parser.add_argument("--disable_chicken_drop_reset", action="store_true",
                     help="Do not automatically bring the chicken back if it drops below the table.")
 parser.add_argument("--max_gripper_height_above_table", type=float, default=0.10,
@@ -172,6 +188,10 @@ PREVIEW_TILE_H = 360
 PREVIEW_LABEL_H = 34
 GRIPPER_Z_LIMIT_WARN_INTERVAL = 50
 CHICKEN_SETTLE_STEPS = 120
+TABLE_TOP_HALF_X = 0.254
+TABLE_TOP_HALF_Y = 0.3048
+
+_PLACEMENT_SCAN_CURSOR = 0
 
 GELLO_SIGNS   = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
 GELLO_OFFSETS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -428,22 +448,83 @@ def get_chicken_root_quat_w(env_uw) -> np.ndarray:
     return np.array([quat.GetReal(), imag[0], imag[1], imag[2]], dtype=np.float32)
 
 
-def random_chicken_xy(rng: np.random.Generator) -> tuple[float, float]:
+def rotated_chicken_footprint_half_extents(yaw: float) -> tuple[float, float]:
+    length, width = [float(v) for v in args_cli.coverage_footprint_size]
+    contour = _chicken_contour_points_m(length, width)
+    c, s = np.cos(yaw), np.sin(yaw)
+    rot = np.array([[c, -s], [s, c]], dtype=np.float32)
+    rotated = contour @ rot.T
+    return float(np.max(np.abs(rotated[:, 0]))), float(np.max(np.abs(rotated[:, 1])))
+
+
+def safe_chicken_xy_half_ranges(yaw: float) -> tuple[float, float]:
     x_half_range, y_half_range = args_cli.chicken_xy_range
-    x = TABLE_CENTER_X + float(rng.uniform(-abs(x_half_range), abs(x_half_range)))
-    y = TABLE_CENTER_Y + float(rng.uniform(-abs(y_half_range), abs(y_half_range)))
+    x_half_range = abs(float(x_half_range))
+    y_half_range = abs(float(y_half_range))
+
+    if args_cli.disable_table_bounds:
+        return x_half_range, y_half_range
+
+    footprint_half_x, footprint_half_y = rotated_chicken_footprint_half_extents(yaw)
+    margin = max(float(args_cli.table_safe_margin), 0.0)
+    safe_half_x = max(TABLE_TOP_HALF_X - footprint_half_x - margin, 0.0)
+    safe_half_y = max(TABLE_TOP_HALF_Y - footprint_half_y - margin, 0.0)
+    return min(x_half_range, safe_half_x), min(y_half_range, safe_half_y)
+
+
+def set_placement_scan_cursor(cursor: int) -> None:
+    global _PLACEMENT_SCAN_CURSOR
+    _PLACEMENT_SCAN_CURSOR = max(int(cursor), 0)
+
+
+def placement_scan_shape(yaw: float) -> tuple[int, int]:
+    x_half_range, y_half_range = safe_chicken_xy_half_ranges(yaw)
+    vertical_step = max(abs(float(args_cli.placement_vertical_step)), 1e-4)
+    horizontal_step = max(abs(float(args_cli.placement_horizontal_step)), 1e-4)
+    row_count = max(int(np.ceil((2.0 * y_half_range) / vertical_step)) + 1, 1)
+    col_count = max(int(np.ceil((2.0 * x_half_range) / horizontal_step)) + 1, 1)
+    return row_count, col_count
+
+
+def scan_coverage_chicken_xy(yaw: float) -> tuple[float, float]:
+    global _PLACEMENT_SCAN_CURSOR
+
+    x_half_range, y_half_range = safe_chicken_xy_half_ranges(yaw)
+    vertical_step = max(abs(float(args_cli.placement_vertical_step)), 1e-4)
+    horizontal_step = max(abs(float(args_cli.placement_horizontal_step)), 1e-4)
+    row_count, col_count = placement_scan_shape(yaw)
+
+    scan_index = _PLACEMENT_SCAN_CURSOR % (row_count * col_count)
+    col = scan_index // row_count
+    row = scan_index % row_count
+    _PLACEMENT_SCAN_CURSOR += 1
+
+    x_local = x_half_range - col * horizontal_step
+    if col % 2 == 0:
+        y_local = -y_half_range + row * vertical_step
+    else:
+        y_local = y_half_range - row * vertical_step
+
+    x_local = float(np.clip(x_local, -x_half_range, x_half_range))
+    y_local = float(np.clip(y_local, -y_half_range, y_half_range))
+    x = TABLE_CENTER_X + x_local
+    y = TABLE_CENTER_Y + y_local
     return x, y
 
 
+def chicken_placement_z() -> float:
+    return float(CHICKEN_SPAWN_Z + args_cli.chicken_spawn_z_offset)
+
+
 def random_chicken_pose(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
-    x, y = random_chicken_xy(rng)
-    yaw = np.deg2rad(float(rng.uniform(-abs(args_cli.chicken_yaw_range_deg), abs(args_cli.chicken_yaw_range_deg))))
+    yaw = 0.0
+    x, y = scan_coverage_chicken_xy(yaw)
     yaw_quat = np.array([np.cos(0.5 * yaw), 0.0, 0.0, np.sin(0.5 * yaw)], dtype=np.float32)
     pos = np.array(
         [
             x,
             y,
-            CHICKEN_SPAWN_Z,
+            chicken_placement_z(),
         ],
         dtype=np.float32,
     )
@@ -481,7 +562,7 @@ def write_chicken_pose_to_usd(pos: np.ndarray, quat: np.ndarray) -> None:
     force_chicken_visuals_visible(root_prim)
 
 
-def place_chicken_on_table(env_uw, rng: np.random.Generator, reason: str) -> np.ndarray:
+def place_chicken_on_table(env_uw, rng: np.random.Generator, reason: str) -> tuple[np.ndarray, np.ndarray]:
     """Place the chicken on/above the table."""
 
     pos, quat = random_chicken_pose(rng)
@@ -498,7 +579,57 @@ def place_chicken_on_table(env_uw, rng: np.random.Generator, reason: str) -> np.
         f"target=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f}) "
         f"(asset api={'yes' if moved_with_asset_api else 'no'})"
     )
-    return pos
+    return pos, quat
+
+
+def hold_arm_step(env, env_uw, arm_joints: np.ndarray) -> None:
+    env.step(
+        torch.tensor(
+            np.array([*arm_joints, 1.0, 1.0], dtype=np.float32),
+            device=env_uw.device,
+        ).unsqueeze(0)
+    )
+
+
+def settle_chicken_reset_pose(
+    env,
+    env_uw,
+    arm_joints: np.ndarray,
+    target_pos: np.ndarray,
+    target_quat: np.ndarray,
+) -> np.ndarray:
+    """Settle contacts, then restore deterministic XY while preserving the rested orientation."""
+
+    prev_pos = get_chicken_root_pos_w(env_uw)
+    stable_steps = 0
+    for _ in range(max(CHICKEN_SETTLE_STEPS, 0)):
+        hold_arm_step(env, env_uw, arm_joints)
+        actual_pos = get_chicken_root_pos_w(env_uw)
+        motion = float(np.linalg.norm(actual_pos - prev_pos))
+        if motion <= max(float(args_cli.chicken_stable_speed), 0.0):
+            stable_steps += 1
+        else:
+            stable_steps = 0
+        prev_pos = actual_pos
+        if stable_steps >= 8:
+            break
+
+    actual_pos = get_chicken_root_pos_w(env_uw)
+    settled_quat = get_chicken_root_quat_w(env_uw)
+    corrected_pos = target_pos.astype(np.float32, copy=True)
+    corrected_pos[2] = actual_pos[2]
+    write_chicken_pose_to_sim(env_uw, corrected_pos, settled_quat)
+    for _ in range(max(int(args_cli.chicken_pin_steps), 0)):
+        write_chicken_pose_to_sim(env_uw, corrected_pos, settled_quat)
+        hold_arm_step(env, env_uw, arm_joints)
+    write_chicken_pose_to_sim(env_uw, corrected_pos, settled_quat)
+    print(
+        "[chicken] settled reset pose: "
+        f"target_xy=({target_pos[0]:+.3f}, {target_pos[1]:+.3f}), "
+        f"final=({corrected_pos[0]:+.3f}, {corrected_pos[1]:+.3f}, {corrected_pos[2]:+.3f}), "
+        f"settled_yaw={np.rad2deg(_quat_wxyz_to_yaw(settled_quat)):+.1f} deg"
+    )
+    return corrected_pos
 
 
 def recover_chicken_if_dropped(env_uw, rng: np.random.Generator) -> bool:
@@ -770,7 +901,7 @@ def make_runtime_chicken_rigid_object_cfg(chicken_cfg) -> RigidObjectCfg:
         prim_path=chicken_cfg.prim_path,
         spawn=chicken_cfg.spawn,
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=tuple(float(v) for v in init_state.pos),
+            pos=(float(init_state.pos[0]), float(init_state.pos[1]), chicken_placement_z()),
             rot=tuple(float(v) for v in init_state.rot),
             lin_vel=(0.0, 0.0, 0.0),
             ang_vel=(0.0, 0.0, 0.0),
@@ -784,6 +915,8 @@ def draw_multi_camera_preview(
     elapsed_s: float,
     quality: dict | None = None,
     coverage_entries: list[dict] | None = None,
+    saved_episodes: int = 0,
+    target_episodes: int = 0,
 ) -> np.ndarray:
     """Return a BGR 2x2 preview grid with wrist, left, right, and a black empty tile."""
 
@@ -798,6 +931,31 @@ def draw_multi_camera_preview(
     preview = np.vstack((np.hstack((tiles[0], tiles[1])), np.hstack((tiles[2], tiles[3]))))
     mins = int(elapsed_s // 60)
     secs = int(elapsed_s % 60)
+    episode_label = (
+        f"EPISODES {saved_episodes}/{target_episodes}"
+        if target_episodes > 0
+        else f"EPISODES {saved_episodes}"
+    )
+    (label_w, label_h), _ = cv2.getTextSize(episode_label, cv2.FONT_HERSHEY_SIMPLEX, 0.72, 2)
+    label_x = max(18, preview.shape[1] - label_w - 18)
+    label_y = 60
+    cv2.rectangle(
+        preview,
+        (label_x - 10, label_y - label_h - 10),
+        (label_x + label_w + 10, label_y + 10),
+        (12, 12, 12),
+        -1,
+    )
+    cv2.putText(
+        preview,
+        episode_label,
+        (label_x, label_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.72,
+        (245, 245, 245),
+        2,
+        cv2.LINE_AA,
+    )
     if recording:
         cv2.circle(preview, (24, 52), 9, (0, 0, 255), -1, cv2.LINE_AA)
         cv2.putText(
@@ -1338,16 +1496,28 @@ def main():
     )
     out_root = pathlib.Path(args_cli.out_dir)
     coverage_entries = load_saved_coverage_entries(out_root)
+    set_placement_scan_cursor(len(coverage_entries))
     if coverage_entries:
         save_coverage_map(out_root, coverage_entries)
     print(f"\n[INFO] Output: {args_cli.out_dir}")
     print(f"[INFO] Resuming from {writer.n_episodes} episodes\n")
     print(f"[INFO] Coverage map has {len(coverage_entries)} saved chicken placements\n")
+    safe_x, safe_y = safe_chicken_xy_half_ranges(0.0)
+    scan_rows, scan_cols = placement_scan_shape(0.0)
+    print(
+        "[INFO] Table-safe placement: "
+        f"table={2.0 * TABLE_TOP_HALF_X:.3f}m x {2.0 * TABLE_TOP_HALF_Y:.3f}m, "
+        f"safe_root_half_range=({safe_x:.3f}, {safe_y:.3f})m, "
+        f"scan={scan_cols} columns x {scan_rows} rows, "
+        f"step=({args_cli.placement_horizontal_step:.3f}m horizontal, "
+        f"{args_cli.placement_vertical_step:.3f}m vertical), "
+        f"z={chicken_placement_z():.4f}m, "
+        "yaw=0.0deg"
+    )
     print("Controls: C=record  S=save  Backspace=discard  Q=quit\n")
 
     # ── startup: drive robot toward GELLO's current pose through articulation drives ──
     env.reset()
-    place_chicken_on_table(env_uw, rng, reason="initial placement")
     episode_arm_offset = sample_episode_arm_offset(rng)
     if np.max(np.abs(episode_arm_offset)) > 0.0:
         print(f"[reset] Episode arm offset deg: {np.rad2deg(episode_arm_offset)}")
@@ -1357,9 +1527,8 @@ def main():
     arm_ids, _ = robot.find_joints(_ARM_JOINT_NAMES)
     last_arm_joints = robot.data.joint_pos[0, arm_ids].cpu().numpy().astype(np.float32)
     perpendicular_reference_joints = last_arm_joints.copy()
-    for _ in range(CHICKEN_SETTLE_STEPS):
-        env.step(torch.tensor(np.array([*last_arm_joints, 1.0, 1.0], dtype=np.float32),
-                              device=env_uw.device).unsqueeze(0))
+    chicken_target_pos, chicken_target_quat = place_chicken_on_table(env_uw, rng, reason="initial placement")
+    settle_chicken_reset_pose(env, env_uw, last_arm_joints, chicken_target_pos, chicken_target_quat)
     gripper_z_limit_w = None
     if args_cli.max_gripper_height_above_table > 0.0:
         gripper_z_limit_w = TABLE_TOP_Z + float(args_cli.max_gripper_height_above_table)
@@ -1466,6 +1635,8 @@ def main():
                 ep_timestamp,
                 episode_tracker,
                 coverage_entries,
+                demos_saved,
+                args_cli.num_demos,
             )
             cv2.imshow(PREVIEW_WINDOW_NAME, preview)
             handle_preview_window_key(cv2.waitKey(1) & 0xFF, preview_window_size)
@@ -1609,24 +1780,21 @@ def _reset_env(
     episode_arm_offset: np.ndarray,
 ):
     env.reset()
-    place_chicken_on_table(env_uw, rng, reason="episode reset")
     if np.max(np.abs(episode_arm_offset)) > 0.0:
         print(f"[reset] Episode arm offset deg: {np.rad2deg(episode_arm_offset)}")
     robot = env_uw.scene["robot"]
     ids, _ = robot.find_joints(_ARM_JOINT_NAMES)
     current = robot.data.joint_pos[0, ids].cpu().numpy().astype(np.float32)
     current = keep_tool_perpendicular_targets(current, perpendicular_reference_joints)
-    for _ in range(CHICKEN_SETTLE_STEPS):
-        env.step(torch.tensor(np.array([*current, 1.0, 1.0], dtype=np.float32),
-                              device=env_uw.device).unsqueeze(0))
+    chicken_target_pos, chicken_target_quat = place_chicken_on_table(env_uw, rng, reason="episode reset")
+    settle_chicken_reset_pose(env, env_uw, current, chicken_target_pos, chicken_target_quat)
     g = keep_tool_perpendicular_targets(
         snap_to_gello(env_uw, gello) + episode_arm_offset,
         perpendicular_reference_joints,
     )
     for _ in range(120):
         current = rate_limit_arm_targets(current, g, MAX_ARM_TARGET_STEP_RAD)
-        env.step(torch.tensor(np.array([*current, 1.0, 1.0], dtype=np.float32),
-                              device=env_uw.device).unsqueeze(0))
+        hold_arm_step(env, env_uw, current)
     return current
 
 
